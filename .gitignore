@@ -1,0 +1,26 @@
+# Xcode
+build/
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+*.xcuserstate
+*.xcbkptlist
+
+# Swift Package Manager
+.build/
+
+# macOS
+.DS_Store
+TransFleetPro.app
+*.dmg
+
+# XcodeGen (generated from project.yml)
+TransFleetPro.xcodeproj
+
+# TransFleet Pro specific
+transfleet.sqlite3
+
