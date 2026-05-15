@@ -2,11 +2,7 @@ import SwiftUI
 
 struct RecentTripRow: View {
     let trip: Trip
-
-    private var customerName: String {
-        let customers = DatabaseManager.shared.getAllCustomers()
-        return customers.first { $0.id == trip.customerId }?.companyName ?? "Unknown"
-    }
+    let customerName: String
 
     var body: some View {
         HStack {

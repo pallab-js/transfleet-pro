@@ -3,7 +3,6 @@ import Charts
 
 struct DashboardView: View {
     @StateObject private var viewModel = DashboardViewModel()
-    @State private var showingRefreshIndicator = false
 
     var body: some View {
         ScrollView {
@@ -33,21 +32,11 @@ struct DashboardView: View {
             }
             Spacer()
             Button(action: {
-                showingRefreshIndicator = true
                 viewModel.loadData()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    showingRefreshIndicator = false
-                }
             }) {
-                if showingRefreshIndicator {
-                    ProgressView()
-                        .scaleEffect(0.7)
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                }
+                Image(systemName: "arrow.clockwise")
             }
             .buttonStyle(.bordered)
-            .disabled(viewModel.isLoading)
         }
     }
 
@@ -117,7 +106,7 @@ struct DashboardView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(viewModel.recentTrips.prefix(5)) { trip in
-                        RecentTripRow(trip: trip)
+                        RecentTripRow(trip: trip, customerName: viewModel.recentTripCustomerNames[trip.customerId] ?? "Unknown")
                         Divider()
                     }
                 }

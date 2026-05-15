@@ -244,8 +244,8 @@ struct Trip: Identifiable, Codable, Hashable {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyyMMdd"
         let dateStr = dateFormatter.string(from: Date())
-        let random = String(format: "%04d", Int.random(in: 1000...9999))
-        return "TF-\(dateStr)-\(random)"
+        let suffix = UUID().uuidString.prefix(8).uppercased()
+        return "TF-\(dateStr)-\(suffix)"
     }
 }
 
@@ -300,8 +300,8 @@ struct Invoice: Identifiable, Codable, Hashable {
         let dateFormatter = DateFormatter()
         dateFormatter.dateFormat = "yyyyMM"
         let dateStr = dateFormatter.string(from: Date())
-        let random = String(format: "%05d", Int.random(in: 10000...99999))
-        return "INV-\(dateStr)-\(random)"
+        let suffix = UUID().uuidString.prefix(8).uppercased()
+        return "INV-\(dateStr)-\(suffix)"
     }
 }
 

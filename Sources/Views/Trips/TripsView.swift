@@ -4,6 +4,7 @@ struct TripsView: View {
     @StateObject private var viewModel = TripViewModel()
     @State private var showAddTrip = false
     @State private var selectedTrip: Trip?
+    @State private var tripToDelete: Trip?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +26,24 @@ struct TripsView: View {
                 selectedTrip = nil
                 showAddTrip = false
             }
+        }
+        .confirmationDialog("Delete Trip", isPresented: .init(get: { tripToDelete != nil }, set: { if !$0 { tripToDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let trip = tripToDelete {
+                    viewModel.deleteTrip(trip)
+                    tripToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                tripToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to delete this trip? This action cannot be undone.")
+        }
+        .alert("Error", isPresented: .init(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
+            Button("OK") { viewModel.errorMessage = nil }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
         }
         .onAppear {
             viewModel.loadData()
@@ -98,7 +117,7 @@ struct TripsView: View {
             .width(100)
 
             TableColumn("Status") { trip in
-                StatusBadge(status: trip.status.rawValue, color: statusColor(trip.status))
+                StatusBadge(status: trip.status.rawValue, color: trip.status.color)
             }
             .width(100)
 
@@ -124,7 +143,7 @@ struct TripsView: View {
                     .buttonStyle(.borderless)
 
                     Button(action: {
-                        viewModel.deleteTrip(trip)
+                        tripToDelete = trip
                     }) {
                         Image(systemName: "trash")
                             .foregroundColor(.red)
@@ -153,22 +172,8 @@ struct TripsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func statusColor(_ status: TripStatus) -> Color {
-        switch status {
-        case .completed: return .green
-        case .inTransit: return .orange
-        case .delivered: return .teal
-        case .pending: return .gray
-        case .assigned: return .blue
-        case .cancelled: return .red
-        }
-    }
-
     private func formatCurrency(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        return formatter.string(from: NSNumber(value: value)) ?? "$0.00"
+        value.formattedAsCurrency()
     }
 }
 
@@ -199,6 +204,13 @@ struct TripFormView: View {
 
     var totalAmount: Double {
         rate + fuelSurcharge
+    }
+
+    private var isValid: Bool {
+        !pickupAddress.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !pickupCity.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !deliveryAddress.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !deliveryCity.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     var body: some View {
@@ -286,7 +298,7 @@ struct TripFormView: View {
                         Text("Total Amount")
                             .fontWeight(.bold)
                         Spacer()
-                        Text(formatCurrency(totalAmount))
+                        Text(totalAmount.formattedAsCurrency())
                             .fontWeight(.bold)
                     }
                 }
@@ -342,23 +354,7 @@ struct TripFormView: View {
             }
             .keyboardShortcut(.escape)
             Button("Save") {
-                var tripToSave = trip ?? Trip(
-                    jobNumber: Trip.generateJobNumber(),
-                    customerId: customerId,
-                    status: status,
-                    pickupAddress: pickupAddress,
-                    pickupCity: pickupCity,
-                    pickupState: pickupState,
-                    pickupZip: pickupZip,
-                    pickupDate: pickupDate,
-                    deliveryAddress: deliveryAddress,
-                    deliveryCity: deliveryCity,
-                    deliveryState: deliveryState,
-                    deliveryZip: deliveryZip,
-                    rate: rate,
-                    fuelSurcharge: fuelSurcharge,
-                    totalAmount: totalAmount
-                )
+                var tripToSave = trip ?? Trip(jobNumber: Trip.generateJobNumber(), customerId: customerId, status: .pending, pickupAddress: "", pickupCity: "", pickupState: "", pickupZip: "", pickupDate: Date(), deliveryAddress: "", deliveryCity: "", deliveryState: "", deliveryZip: "", rate: 0, fuelSurcharge: 0, totalAmount: 0)
                 tripToSave.customerId = customerId
                 tripToSave.driverId = driverId
                 tripToSave.vehicleId = vehicleId
@@ -378,16 +374,10 @@ struct TripFormView: View {
                 tripToSave.totalAmount = totalAmount
                 onSave(tripToSave)
             }
+            .disabled(customers.isEmpty || !isValid)
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.return)
         }
         .padding()
-    }
-
-    private func formatCurrency(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        return formatter.string(from: NSNumber(value: value)) ?? "$0.00"
     }
 }

@@ -4,6 +4,7 @@ struct DriversView: View {
     @StateObject private var viewModel = DriverViewModel()
     @State private var showAddDriver = false
     @State private var selectedDriver: Driver?
+    @State private var driverToDelete: Driver?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +26,24 @@ struct DriversView: View {
                 selectedDriver = nil
                 showAddDriver = false
             }
+        }
+        .confirmationDialog("Delete Driver", isPresented: .init(get: { driverToDelete != nil }, set: { if !$0 { driverToDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let driver = driverToDelete {
+                    viewModel.deleteDriver(driver)
+                    driverToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                driverToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to delete this driver? This action cannot be undone.")
+        }
+        .alert("Error", isPresented: .init(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
+            Button("OK") { viewModel.errorMessage = nil }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
         }
         .onAppear {
             viewModel.loadData()
@@ -119,7 +138,7 @@ struct DriversView: View {
                     .buttonStyle(.borderless)
 
                     Button(action: {
-                        viewModel.deleteDriver(driver)
+                        driverToDelete = driver
                     }) {
                         Image(systemName: "trash")
                             .foregroundColor(.red)
@@ -168,12 +187,20 @@ struct DriverFormView: View {
     @State private var email: String = ""
     @State private var phone: String = ""
     @State private var address: String = ""
+    @State private var emergencyContact: String = ""
+    @State private var emergencyPhone: String = ""
     @State private var licenseNumber: String = ""
     @State private var licenseState: String = ""
     @State private var licenseExpiry: Date = Date().addingTimeInterval(365*24*60*60)
     @State private var status: DriverStatus = .active
     @State private var hireDate: Date = Date()
     @State private var rating: Double = 4.0
+
+    private var isValid: Bool {
+        !firstName.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !lastName.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !licenseNumber.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -186,6 +213,11 @@ struct DriverFormView: View {
                     TextField("Email", text: $email)
                     TextField("Phone", text: $phone)
                     TextField("Address", text: $address)
+                }
+
+                Section("Emergency Contact") {
+                    TextField("Contact Name", text: $emergencyContact)
+                    TextField("Emergency Phone", text: $emergencyPhone)
                 }
 
                 Section("License Information") {
@@ -220,6 +252,8 @@ struct DriverFormView: View {
                 email = driver.email
                 phone = driver.phone
                 address = driver.address ?? ""
+                emergencyContact = driver.emergencyContact ?? ""
+                emergencyPhone = driver.emergencyPhone ?? ""
                 licenseNumber = driver.licenseNumber
                 licenseState = driver.licenseState
                 licenseExpiry = driver.licenseExpiry
@@ -252,23 +286,14 @@ struct DriverFormView: View {
             }
             .keyboardShortcut(.escape)
             Button("Save") {
-                var driverToSave = driver ?? Driver(
-                    firstName: firstName,
-                    lastName: lastName,
-                    email: email,
-                    phone: phone,
-                    licenseNumber: licenseNumber,
-                    licenseState: licenseState,
-                    licenseExpiry: licenseExpiry,
-                    status: status,
-                    hireDate: hireDate,
-                    rating: rating
-                )
+                var driverToSave = driver ?? Driver(firstName: "", lastName: "", email: "", phone: "", licenseNumber: "", licenseState: "", licenseExpiry: Date(), status: .active, hireDate: Date(), rating: 0)
                 driverToSave.firstName = firstName
                 driverToSave.lastName = lastName
                 driverToSave.email = email
                 driverToSave.phone = phone
                 driverToSave.address = address.isEmpty ? nil : address
+                driverToSave.emergencyContact = emergencyContact.isEmpty ? nil : emergencyContact
+                driverToSave.emergencyPhone = emergencyPhone.isEmpty ? nil : emergencyPhone
                 driverToSave.licenseNumber = licenseNumber
                 driverToSave.licenseState = licenseState
                 driverToSave.licenseExpiry = licenseExpiry
@@ -279,6 +304,7 @@ struct DriverFormView: View {
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.return)
+            .disabled(!isValid)
         }
         .padding()
     }

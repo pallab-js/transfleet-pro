@@ -4,6 +4,7 @@ struct FleetView: View {
     @StateObject private var viewModel = FleetViewModel()
     @State private var showAddVehicle = false
     @State private var selectedVehicle: Vehicle?
+    @State private var vehicleToDelete: Vehicle?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +26,24 @@ struct FleetView: View {
                 selectedVehicle = nil
                 showAddVehicle = false
             }
+        }
+        .confirmationDialog("Delete Vehicle", isPresented: .init(get: { vehicleToDelete != nil }, set: { if !$0 { vehicleToDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let vehicle = vehicleToDelete {
+                    viewModel.deleteVehicle(vehicle)
+                    vehicleToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                vehicleToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to delete this vehicle? This action cannot be undone.")
+        }
+        .alert("Error", isPresented: .init(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
+            Button("OK") { viewModel.errorMessage = nil }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
         }
         .onAppear {
             viewModel.loadData()
@@ -107,7 +126,7 @@ struct FleetView: View {
                     .buttonStyle(.borderless)
 
                     Button(action: {
-                        viewModel.deleteVehicle(vehicle)
+                        vehicleToDelete = vehicle
                     }) {
                         Image(systemName: "trash")
                             .foregroundColor(.red)
@@ -161,6 +180,11 @@ struct VehicleFormView: View {
     @State private var status: VehicleStatus = .available
     @State private var currentOdometer: Int = 0
     @State private var fuelType: FuelType = .diesel
+
+    private var isValid: Bool {
+        !name.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !licensePlate.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -243,18 +267,7 @@ struct VehicleFormView: View {
             }
             .keyboardShortcut(.escape)
             Button("Save") {
-                var vehicleToSave = vehicle ?? Vehicle(
-                    name: name,
-                    type: type,
-                    licensePlate: licensePlate,
-                    make: make,
-                    model: model,
-                    year: year,
-                    vin: vin,
-                    status: status,
-                    currentOdometer: currentOdometer,
-                    fuelType: fuelType
-                )
+                var vehicleToSave = vehicle ?? Vehicle(name: "", type: .truck, licensePlate: "", make: "", model: "", year: 0, vin: "", status: .available, currentOdometer: 0, fuelType: .diesel)
                 vehicleToSave.name = name
                 vehicleToSave.type = type
                 vehicleToSave.licensePlate = licensePlate
@@ -269,6 +282,7 @@ struct VehicleFormView: View {
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.return)
+            .disabled(!isValid)
         }
         .padding()
     }

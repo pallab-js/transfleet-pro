@@ -4,6 +4,7 @@ struct CustomersView: View {
     @StateObject private var viewModel = CustomerViewModel()
     @State private var showAddCustomer = false
     @State private var selectedCustomer: Customer?
+    @State private var customerToDelete: Customer?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +26,24 @@ struct CustomersView: View {
                 selectedCustomer = nil
                 showAddCustomer = false
             }
+        }
+        .confirmationDialog("Delete Customer", isPresented: .init(get: { customerToDelete != nil }, set: { if !$0 { customerToDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let customer = customerToDelete {
+                    viewModel.deleteCustomer(customer)
+                    customerToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                customerToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to delete this customer? This action cannot be undone.")
+        }
+        .alert("Error", isPresented: .init(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
+            Button("OK") { viewModel.errorMessage = nil }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
         }
         .onAppear {
             viewModel.loadData()
@@ -114,7 +133,7 @@ struct CustomersView: View {
                     .buttonStyle(.borderless)
 
                     Button(action: {
-                        viewModel.deleteCustomer(customer)
+                        customerToDelete = customer
                     }) {
                         Image(systemName: "trash")
                             .foregroundColor(.red)
@@ -144,10 +163,7 @@ struct CustomersView: View {
     }
 
     private func formatCurrency(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        return formatter.string(from: NSNumber(value: value)) ?? "$0.00"
+        value.formattedAsCurrency()
     }
 }
 
@@ -167,6 +183,11 @@ struct CustomerFormView: View {
     @State private var zip: String = ""
     @State private var creditLimit: Double = 10000
     @State private var paymentTerms: Int = 30
+
+    private var isValid: Bool {
+        !companyName.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !contactName.trimmingCharacters(in: .whitespaces).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -259,19 +280,7 @@ struct CustomerFormView: View {
             }
             .keyboardShortcut(.escape)
             Button("Save") {
-                var customerToSave = customer ?? Customer(
-                    companyName: companyName,
-                    contactName: contactName,
-                    email: email,
-                    phone: phone,
-                    type: type,
-                    address: address,
-                    city: city,
-                    state: state,
-                    zip: zip,
-                    creditLimit: creditLimit,
-                    paymentTerms: paymentTerms
-                )
+                var customerToSave = customer ?? Customer(companyName: "", contactName: "", email: "", phone: "", type: .commercial, address: "", city: "", state: "", zip: "", creditLimit: 0, paymentTerms: 30)
                 customerToSave.companyName = companyName
                 customerToSave.contactName = contactName
                 customerToSave.email = email
@@ -287,6 +296,7 @@ struct CustomerFormView: View {
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.return)
+            .disabled(!isValid)
         }
         .padding()
     }

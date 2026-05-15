@@ -10,22 +10,25 @@ class DashboardViewModel: ObservableObject {
         fleetUtilization: 0, overdueMaintenance: 0, expiringLicenses: 0, activeCustomers: 0
     )
     @Published var recentTrips: [Trip] = []
+    @Published var recentTripCustomerNames: [UUID: String] = [:]
     @Published var revenueData: [(Date, Double)] = []
     @Published var fleetUtilizationData: [(VehicleStatus, Int)] = []
     @Published var isLoading = false
-
-    func loadData() {
-        isLoading = true
-        stats = DatabaseManager.shared.getDashboardStats()
-        recentTrips = Array(DatabaseManager.shared.getAllTrips().prefix(10))
-        revenueData = DatabaseManager.shared.getRevenueByMonth(months: 6)
-        fleetUtilizationData = DatabaseManager.shared.getFleetUtilization()
-        isLoading = false
-    }
+    @Published var errorMessage: String?
 
     var profitMargin: Double {
         guard stats.monthlyRevenue > 0 else { return 0 }
         return ((stats.monthlyRevenue - stats.monthlyExpenses) / stats.monthlyRevenue) * 100
+    }
+
+    func loadData() {
+        stats = DatabaseManager.shared.getDashboardStats()
+        let customers = DatabaseManager.shared.getAllCustomers()
+        let customerMap = Dictionary(uniqueKeysWithValues: customers.map { ($0.id, $0.companyName) })
+        recentTripCustomerNames = customerMap
+        recentTrips = Array(DatabaseManager.shared.getAllTrips().prefix(10))
+        revenueData = DatabaseManager.shared.getRevenueByMonth(months: 6)
+        fleetUtilizationData = DatabaseManager.shared.getFleetUtilization()
     }
 }
 
@@ -37,6 +40,7 @@ class FleetViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var searchText = ""
     @Published var filterStatus: VehicleStatus?
+    @Published var errorMessage: String?
 
     var filteredVehicles: [Vehicle] {
         var result = vehicles
@@ -58,18 +62,22 @@ class FleetViewModel: ObservableObject {
     }
 
     func loadData() {
-        isLoading = true
         vehicles = DatabaseManager.shared.getAllVehicles()
-        isLoading = false
     }
 
     func deleteVehicle(_ vehicle: Vehicle) {
-        _ = DatabaseManager.shared.deleteVehicle(vehicle)
+        if !DatabaseManager.shared.deleteVehicle(vehicle) {
+            errorMessage = "Failed to delete vehicle"
+            return
+        }
         vehicles.removeAll { $0.id == vehicle.id }
     }
 
     func saveVehicle(_ vehicle: Vehicle) {
-        _ = DatabaseManager.shared.saveVehicle(vehicle)
+        if !DatabaseManager.shared.saveVehicle(vehicle) {
+            errorMessage = "Failed to save vehicle"
+            return
+        }
         loadData()
     }
 }
@@ -82,6 +90,7 @@ class DriverViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var searchText = ""
     @Published var filterStatus: DriverStatus?
+    @Published var errorMessage: String?
 
     var filteredDrivers: [Driver] {
         var result = drivers
@@ -103,18 +112,22 @@ class DriverViewModel: ObservableObject {
     }
 
     func loadData() {
-        isLoading = true
         drivers = DatabaseManager.shared.getAllDrivers()
-        isLoading = false
     }
 
     func deleteDriver(_ driver: Driver) {
-        _ = DatabaseManager.shared.deleteDriver(driver)
+        if !DatabaseManager.shared.deleteDriver(driver) {
+            errorMessage = "Failed to delete driver"
+            return
+        }
         drivers.removeAll { $0.id == driver.id }
     }
 
     func saveDriver(_ driver: Driver) {
-        _ = DatabaseManager.shared.saveDriver(driver)
+        if !DatabaseManager.shared.saveDriver(driver) {
+            errorMessage = "Failed to save driver"
+            return
+        }
         loadData()
     }
 
@@ -135,6 +148,7 @@ class TripViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var searchText = ""
     @Published var filterStatus: TripStatus?
+    @Published var errorMessage: String?
 
     var filteredTrips: [Trip] {
         var result = trips
@@ -155,21 +169,25 @@ class TripViewModel: ObservableObject {
     }
 
     func loadData() {
-        isLoading = true
         trips = DatabaseManager.shared.getAllTrips()
         customers = DatabaseManager.shared.getAllCustomers()
         drivers = DatabaseManager.shared.getAllDrivers()
         vehicles = DatabaseManager.shared.getAllVehicles()
-        isLoading = false
     }
 
     func deleteTrip(_ trip: Trip) {
-        _ = DatabaseManager.shared.deleteTrip(trip)
+        if !DatabaseManager.shared.deleteTrip(trip) {
+            errorMessage = "Failed to delete trip"
+            return
+        }
         trips.removeAll { $0.id == trip.id }
     }
 
     func saveTrip(_ trip: Trip) {
-        _ = DatabaseManager.shared.saveTrip(trip)
+        if !DatabaseManager.shared.saveTrip(trip) {
+            errorMessage = "Failed to save trip"
+            return
+        }
         loadData()
     }
 
@@ -196,6 +214,7 @@ class CustomerViewModel: ObservableObject {
     @Published var isLoading = false
     @Published var searchText = ""
     @Published var filterType: CustomerType?
+    @Published var errorMessage: String?
 
     var filteredCustomers: [Customer] {
         var result = customers
@@ -217,18 +236,22 @@ class CustomerViewModel: ObservableObject {
     }
 
     func loadData() {
-        isLoading = true
         customers = DatabaseManager.shared.getAllCustomers()
-        isLoading = false
     }
 
     func deleteCustomer(_ customer: Customer) {
-        _ = DatabaseManager.shared.deleteCustomer(customer)
+        if !DatabaseManager.shared.deleteCustomer(customer) {
+            errorMessage = "Failed to delete customer"
+            return
+        }
         customers.removeAll { $0.id == customer.id }
     }
 
     func saveCustomer(_ customer: Customer) {
-        _ = DatabaseManager.shared.saveCustomer(customer)
+        if !DatabaseManager.shared.saveCustomer(customer) {
+            errorMessage = "Failed to save customer"
+            return
+        }
         loadData()
     }
 }
@@ -241,6 +264,7 @@ class FinanceViewModel: ObservableObject {
     @Published var customers: [Customer] = []
     @Published var isLoading = false
     @Published var selectedTab: FinanceTab = .invoices
+    @Published var errorMessage: String?
 
     var totalRevenue: Double {
         invoices.filter { $0.status == .paid }.reduce(0) { $0 + $1.total }
@@ -259,30 +283,40 @@ class FinanceViewModel: ObservableObject {
     }
 
     func loadData() {
-        isLoading = true
         invoices = DatabaseManager.shared.getAllInvoices()
         expenses = DatabaseManager.shared.getAllExpenses()
         customers = DatabaseManager.shared.getAllCustomers()
-        isLoading = false
     }
 
     func saveInvoice(_ invoice: Invoice) {
-        _ = DatabaseManager.shared.saveInvoice(invoice)
+        if !DatabaseManager.shared.saveInvoice(invoice) {
+            errorMessage = "Failed to save invoice"
+            return
+        }
         loadData()
     }
 
     func deleteInvoice(_ invoice: Invoice) {
-        _ = DatabaseManager.shared.deleteInvoice(invoice)
+        if !DatabaseManager.shared.deleteInvoice(invoice) {
+            errorMessage = "Failed to delete invoice"
+            return
+        }
         invoices.removeAll { $0.id == invoice.id }
     }
 
     func saveExpense(_ expense: Expense) {
-        _ = DatabaseManager.shared.saveExpense(expense)
+        if !DatabaseManager.shared.saveExpense(expense) {
+            errorMessage = "Failed to save expense"
+            return
+        }
         loadData()
     }
 
     func deleteExpense(_ expense: Expense) {
-        _ = DatabaseManager.shared.deleteExpense(expense)
+        if !DatabaseManager.shared.deleteExpense(expense) {
+            errorMessage = "Failed to delete expense"
+            return
+        }
         expenses.removeAll { $0.id == expense.id }
     }
 
@@ -325,12 +359,10 @@ class ReportsViewModel: ObservableObject {
     }
 
     func loadData() {
-        isLoading = true
         revenueData = DatabaseManager.shared.getRevenueByMonth(months: 12)
         expenseData = DatabaseManager.shared.getExpensesByCategory()
         fleetUtilizationData = DatabaseManager.shared.getFleetUtilization()
         tripStatusData = DatabaseManager.shared.getTripsByStatus()
-        isLoading = false
     }
 }
 
@@ -346,17 +378,15 @@ enum ReportType: String, CaseIterable {
 @MainActor
 class SettingsViewModel: ObservableObject {
     @Published var settings: BusinessSettings = .default
+    @Published var errorMessage: String?
 
     func loadData() {
-        if let data = UserDefaults.standard.data(forKey: "business_settings"),
-           let decoded = try? JSONDecoder().decode(BusinessSettings.self, from: data) {
-            settings = decoded
-        }
+        settings = DatabaseManager.shared.loadSettings()
     }
 
     func saveSettings() {
-        if let encoded = try? JSONEncoder().encode(settings) {
-            UserDefaults.standard.set(encoded, forKey: "business_settings")
+        if !DatabaseManager.shared.saveSettings(settings) {
+            errorMessage = "Failed to save settings"
         }
     }
 

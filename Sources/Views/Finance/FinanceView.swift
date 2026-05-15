@@ -3,6 +3,10 @@ import Charts
 
 struct FinanceView: View {
     @StateObject private var viewModel = FinanceViewModel()
+    @State private var invoiceToDelete: Invoice?
+    @State private var expenseToDelete: Expense?
+    @State private var showCreateInvoice = false
+    @State private var showAddExpense = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +33,49 @@ struct FinanceView: View {
             }
         }
         .background(Color(NSColor.windowBackgroundColor))
+        .confirmationDialog("Delete Invoice", isPresented: .init(get: { invoiceToDelete != nil }, set: { if !$0 { invoiceToDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let invoice = invoiceToDelete {
+                    viewModel.deleteInvoice(invoice)
+                    invoiceToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                invoiceToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to delete this invoice? This action cannot be undone.")
+        }
+        .confirmationDialog("Delete Expense", isPresented: .init(get: { expenseToDelete != nil }, set: { if !$0 { expenseToDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let expense = expenseToDelete {
+                    viewModel.deleteExpense(expense)
+                    expenseToDelete = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {
+                expenseToDelete = nil
+            }
+        } message: {
+            Text("Are you sure you want to delete this expense? This action cannot be undone.")
+        }
+        .alert("Error", isPresented: .init(get: { viewModel.errorMessage != nil }, set: { if !$0 { viewModel.errorMessage = nil } })) {
+            Button("OK") { viewModel.errorMessage = nil }
+        } message: {
+            Text(viewModel.errorMessage ?? "")
+        }
+        .sheet(isPresented: $showCreateInvoice) {
+            CreateInvoiceView(customers: viewModel.customers) { invoice in
+                viewModel.saveInvoice(invoice)
+                showCreateInvoice = false
+            }
+        }
+        .sheet(isPresented: $showAddExpense) {
+            AddExpenseView { expense in
+                viewModel.saveExpense(expense)
+                showAddExpense = false
+            }
+        }
         .onAppear {
             viewModel.loadData()
         }
@@ -124,7 +171,7 @@ struct FinanceView: View {
 
                     TableColumn("Actions") { invoice in
                         HStack(spacing: 8) {
-                            Button(action: { viewModel.deleteInvoice(invoice) }) {
+                            Button(action: { invoiceToDelete = invoice }) {
                                 Image(systemName: "trash")
                                     .foregroundColor(.red)
                             }
@@ -183,7 +230,7 @@ struct FinanceView: View {
 
                         TableColumn("Actions") { expense in
                             HStack(spacing: 8) {
-                                Button(action: { viewModel.deleteExpense(expense) }) {
+                                Button(action: { expenseToDelete = expense }) {
                                     Image(systemName: "trash")
                                         .foregroundColor(.red)
                                 }
@@ -228,28 +275,11 @@ struct FinanceView: View {
     }
 
     private func createInvoice() {
-        let invoice = Invoice(
-            invoiceNumber: Invoice.generateInvoiceNumber(),
-            customerId: UUID(),
-            tripIds: [],
-            invoiceDate: Date(),
-            dueDate: Date().addingTimeInterval(Double(viewModel.customers.first?.paymentTerms ?? 30) * 24 * 60 * 60),
-            subtotal: 0,
-            tax: 0,
-            total: 0,
-            status: .draft
-        )
-        viewModel.saveInvoice(invoice)
+        showCreateInvoice = true
     }
 
     private func addExpense() {
-        let expense = Expense(
-            category: .other,
-            description: "New Expense",
-            amount: 0,
-            date: Date()
-        )
-        viewModel.saveExpense(expense)
+        showAddExpense = true
     }
 
     private func statusColor(_ status: InvoiceStatus) -> Color {
@@ -263,9 +293,195 @@ struct FinanceView: View {
     }
 
     private func formatCurrency(_ value: Double) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
-        return formatter.string(from: NSNumber(value: value)) ?? "$0.00"
+        value.formattedAsCurrency()
+    }
+}
+
+// MARK: - Create Invoice Sheet
+struct CreateInvoiceView: View {
+    @Environment(\.dismiss) var dismiss
+    let customers: [Customer]
+    let onSave: (Invoice) -> Void
+
+    @State private var selectedCustomerId: UUID
+    @State private var invoiceDate: Date = Date()
+    @State private var dueDate: Date = Date().addingTimeInterval(30 * 24 * 60 * 60)
+    @State private var subtotal: Double = 0
+    @State private var taxRate: Double = 0
+    @State private var notes: String = ""
+
+    private var taxAmount: Double { subtotal * taxRate / 100 }
+    private var total: Double { subtotal + taxAmount }
+
+    init(customers: [Customer], onSave: @escaping (Invoice) -> Void) {
+        self.customers = customers
+        self.onSave = onSave
+        _selectedCustomerId = State(initialValue: customers.first?.id ?? UUID())
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Create Invoice")
+                    .font(.headline)
+                Spacer()
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.borderless)
+            }
+            .padding()
+
+            Form {
+                Section("Customer") {
+                    Picker("Customer", selection: $selectedCustomerId) {
+                        ForEach(customers) { customer in
+                            Text(customer.companyName).tag(customer.id)
+                        }
+                    }
+                }
+
+                Section("Dates") {
+                    DatePicker("Invoice Date", selection: $invoiceDate, displayedComponents: .date)
+                    DatePicker("Due Date", selection: $dueDate, displayedComponents: .date)
+                }
+
+                Section("Amounts") {
+                    HStack {
+                        Text("Subtotal")
+                        Spacer()
+                        TextField("0", value: $subtotal, format: .currency(code: "USD"))
+                            .frame(width: 120)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    HStack {
+                        Text("Tax Rate (%)")
+                        Spacer()
+                        TextField("0", value: $taxRate, format: .number)
+                            .frame(width: 80)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Divider()
+                    HStack {
+                        Text("Total")
+                            .fontWeight(.bold)
+                        Spacer()
+                        Text(total, format: .currency(code: "USD"))
+                            .fontWeight(.bold)
+                    }
+                }
+
+                Section("Notes") {
+                    TextField("Notes", text: $notes)
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.escape)
+                Button("Save") {
+                    let invoice = Invoice(
+                        invoiceNumber: Invoice.generateInvoiceNumber(),
+                        customerId: selectedCustomerId,
+                        tripIds: [],
+                        invoiceDate: invoiceDate,
+                        dueDate: dueDate,
+                        subtotal: subtotal,
+                        tax: taxAmount,
+                        total: total,
+                        status: .draft,
+                        notes: notes.isEmpty ? nil : notes
+                    )
+                    onSave(invoice)
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return)
+                .disabled(customers.isEmpty || subtotal < 0)
+            }
+            .padding()
+        }
+        .frame(width: 450, height: 500)
+    }
+}
+
+// MARK: - Add Expense Sheet
+struct AddExpenseView: View {
+    @Environment(\.dismiss) var dismiss
+    let onSave: (Expense) -> Void
+
+    @State private var category: ExpenseCategory = .fuel
+    @State private var description: String = ""
+    @State private var amount: Double = 0
+    @State private var date: Date = Date()
+    @State private var vendor: String = ""
+    @State private var notes: String = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Add Expense")
+                    .font(.headline)
+                Spacer()
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.borderless)
+            }
+            .padding()
+
+            Form {
+                Section("Expense Details") {
+                    Picker("Category", selection: $category) {
+                        ForEach(ExpenseCategory.allCases, id: \.self) { cat in
+                            Text(cat.rawValue).tag(cat)
+                        }
+                    }
+                    TextField("Description", text: $description)
+                    TextField("Vendor", text: $vendor)
+                }
+
+                Section("Amount") {
+                    HStack {
+                        Text("Amount")
+                        Spacer()
+                        TextField("0", value: $amount, format: .currency(code: "USD"))
+                            .frame(width: 120)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    DatePicker("Date", selection: $date, displayedComponents: .date)
+                }
+
+                Section("Notes") {
+                    TextField("Notes", text: $notes)
+                }
+            }
+            .formStyle(.grouped)
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.escape)
+                Button("Save") {
+                    let expense = Expense(
+                        category: category,
+                        vendor: vendor.isEmpty ? nil : vendor,
+                        description: description,
+                        amount: amount,
+                        date: date,
+                        notes: notes.isEmpty ? nil : notes
+                    )
+                    onSave(expense)
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return)
+                .disabled(description.isEmpty || amount < 0)
+            }
+            .padding()
+        }
+        .frame(width: 450, height: 500)
     }
 }

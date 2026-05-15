@@ -812,6 +812,236 @@ class DatabaseManager {
         }
     }
 
+    // MARK: - Maintenance Record CRUD
+    func saveMaintenanceRecord(_ record: MaintenanceRecord) -> Bool {
+        guard let db = db else { return false }
+        do {
+            let insert = maintenanceRecords.insert(or: .replace,
+                id <- record.id.uuidString,
+                vehicleId <- record.vehicleId.uuidString,
+                maintenanceType <- record.type.rawValue,
+                description <- record.description,
+                date <- record.date.timeIntervalSince1970,
+                odometer <- record.odometer,
+                cost <- record.cost,
+                vendor <- record.vendor,
+                notes <- record.notes,
+                createdAt <- record.createdAt.timeIntervalSince1970
+            )
+            try db.run(insert)
+            return true
+        } catch {
+            print("Save maintenance record failed: \(error)")
+            return false
+        }
+    }
+
+    func getAllMaintenanceRecords(for vehicleId: UUID? = nil) -> [MaintenanceRecord] {
+        guard let db = db else { return [] }
+        var result: [MaintenanceRecord] = []
+        do {
+            var query = maintenanceRecords.order(date.desc)
+            if let vid = vehicleId {
+                query = query.filter(self.vehicleId == vid.uuidString)
+            }
+            for row in try db.prepare(query) {
+                var record = MaintenanceRecord(
+                    vehicleId: UUID(uuidString: row[self.vehicleId]) ?? UUID(),
+                    type: MaintenanceType(rawValue: row[maintenanceType]) ?? .other,
+                    description: row[description],
+                    date: Date(timeIntervalSince1970: row[date]),
+                    odometer: row[odometer],
+                    cost: row[cost],
+                    vendor: row[vendor],
+                    notes: row[notes]
+                )
+                record.id = UUID(uuidString: row[id]) ?? UUID()
+                record.createdAt = Date(timeIntervalSince1970: row[createdAt])
+                result.append(record)
+            }
+        } catch {
+            print("Get maintenance records failed: \(error)")
+        }
+        return result
+    }
+
+    func deleteMaintenanceRecord(_ record: MaintenanceRecord) -> Bool {
+        guard let db = db else { return false }
+        do {
+            let row = maintenanceRecords.filter(id == record.id.uuidString)
+            try db.run(row.delete())
+            return true
+        } catch {
+            print("Delete maintenance record failed: \(error)")
+            return false
+        }
+    }
+
+    // MARK: - Fuel Log CRUD
+    func saveFuelLog(_ log: FuelLog) -> Bool {
+        guard let db = db else { return false }
+        do {
+            let insert = fuelLogs.insert(or: .replace,
+                id <- log.id.uuidString,
+                vehicleId <- log.vehicleId.uuidString,
+                date <- log.date.timeIntervalSince1970,
+                odometer <- log.odometer,
+                quantity <- log.quantity,
+                pricePerUnit <- log.pricePerUnit,
+                totalCost <- log.totalCost,
+                fuelType <- log.fuelType.rawValue,
+                location <- log.location,
+                notes <- log.notes,
+                createdAt <- log.createdAt.timeIntervalSince1970
+            )
+            try db.run(insert)
+            return true
+        } catch {
+            print("Save fuel log failed: \(error)")
+            return false
+        }
+    }
+
+    func getAllFuelLogs(for vehicleId: UUID? = nil) -> [FuelLog] {
+        guard let db = db else { return [] }
+        var result: [FuelLog] = []
+        do {
+            var query = fuelLogs.order(date.desc)
+            if let vid = vehicleId {
+                query = query.filter(self.vehicleId == vid.uuidString)
+            }
+            for row in try db.prepare(query) {
+                var log = FuelLog(
+                    vehicleId: UUID(uuidString: row[self.vehicleId]) ?? UUID(),
+                    date: Date(timeIntervalSince1970: row[date]),
+                    odometer: row[odometer],
+                    quantity: row[quantity],
+                    pricePerUnit: row[pricePerUnit],
+                    totalCost: row[totalCost],
+                    fuelType: FuelType(rawValue: row[fuelType]) ?? .diesel,
+                    location: row[location],
+                    notes: row[notes]
+                )
+                log.id = UUID(uuidString: row[id]) ?? UUID()
+                log.createdAt = Date(timeIntervalSince1970: row[createdAt])
+                result.append(log)
+            }
+        } catch {
+            print("Get fuel logs failed: \(error)")
+        }
+        return result
+    }
+
+    func deleteFuelLog(_ log: FuelLog) -> Bool {
+        guard let db = db else { return false }
+        do {
+            let row = fuelLogs.filter(id == log.id.uuidString)
+            try db.run(row.delete())
+            return true
+        } catch {
+            print("Delete fuel log failed: \(error)")
+            return false
+        }
+    }
+
+    // MARK: - Certification CRUD
+    func saveCertification(_ cert: Certification) -> Bool {
+        guard let db = db else { return false }
+        do {
+            let insert = certifications.insert(or: .replace,
+                id <- cert.id.uuidString,
+                driverId <- cert.driverId.uuidString,
+                certificationType <- cert.type.rawValue,
+                name <- cert.name,
+                issuedDate <- cert.issuedDate.timeIntervalSince1970,
+                expiryDate <- cert.expiryDate?.timeIntervalSince1970,
+                documentNumber <- cert.documentNumber,
+                createdAt <- cert.createdAt.timeIntervalSince1970
+            )
+            try db.run(insert)
+            return true
+        } catch {
+            print("Save certification failed: \(error)")
+            return false
+        }
+    }
+
+    func getAllCertifications(for driverId: UUID? = nil) -> [Certification] {
+        guard let db = db else { return [] }
+        var result: [Certification] = []
+        do {
+            var query = certifications.order(issuedDate.desc)
+            if let did = driverId {
+                query = query.filter(self.driverId == did.uuidString)
+            }
+            for row in try db.prepare(query) {
+                var cert = Certification(
+                    driverId: UUID(uuidString: row[self.driverId]) ?? UUID(),
+                    type: CertificationType(rawValue: row[certificationType]) ?? .other,
+                    name: row[name],
+                    issuedDate: Date(timeIntervalSince1970: row[issuedDate]),
+                    expiryDate: row[expiryDate].map { Date(timeIntervalSince1970: $0) },
+                    documentNumber: row[documentNumber]
+                )
+                cert.id = UUID(uuidString: row[id]) ?? UUID()
+                cert.createdAt = Date(timeIntervalSince1970: row[createdAt])
+                result.append(cert)
+            }
+        } catch {
+            print("Get certifications failed: \(error)")
+        }
+        return result
+    }
+
+    func deleteCertification(_ cert: Certification) -> Bool {
+        guard let db = db else { return false }
+        do {
+            let row = certifications.filter(id == cert.id.uuidString)
+            try db.run(row.delete())
+            return true
+        } catch {
+            print("Delete certification failed: \(error)")
+            return false
+        }
+    }
+
+    // MARK: - Settings
+    func saveSettings(_ settings: BusinessSettings) -> Bool {
+        guard let db = db else { return false }
+        do {
+            if let data = try? JSONEncoder().encode(settings),
+               let json = String(data: data, encoding: .utf8) {
+                let insert = self.settings.insert(or: .replace,
+                    self.settingsKey <- "business_settings",
+                    self.settingsValue <- json
+                )
+                try db.run(insert)
+                return true
+            }
+            return false
+        } catch {
+            print("Save settings failed: \(error)")
+            return false
+        }
+    }
+
+    func loadSettings() -> BusinessSettings {
+        guard let db = db else { return .default }
+        do {
+            let query = self.settings.filter(self.settingsKey == "business_settings")
+            if let row = try db.pluck(query) {
+                let json = row[self.settingsValue]
+                if let data = json.data(using: .utf8),
+                   let settings = try? JSONDecoder().decode(BusinessSettings.self, from: data) {
+                    return settings
+                }
+            }
+        } catch {
+            print("Load settings failed: \(error)")
+        }
+        return .default
+    }
+
     // MARK: - Dashboard Stats
     func getDashboardStats() -> DashboardStats {
         let allVehicles = getAllVehicles()
@@ -842,6 +1072,8 @@ class DatabaseManager {
         let thirtyDaysFromNow = Date().addingTimeInterval(30*24*60*60)
         let expiringLicenses = allDrivers.filter { $0.licenseExpiry <= thirtyDaysFromNow && $0.status == .active }.count
 
+        let vehiclesInMaintenance = allVehicles.filter { $0.status == .maintenance }.count
+
         return DashboardStats(
             totalVehicles: allVehicles.count,
             activeVehicles: activeVehicles.count,
@@ -852,7 +1084,7 @@ class DatabaseManager {
             monthlyRevenue: monthlyRevenue,
             monthlyExpenses: monthlyExpenses,
             fleetUtilization: fleetUtilization,
-            overdueMaintenance: 0,
+            overdueMaintenance: vehiclesInMaintenance,
             expiringLicenses: expiringLicenses,
             activeCustomers: allCustomers.count
         )
@@ -862,11 +1094,13 @@ class DatabaseManager {
     func getRevenueByMonth(months: Int = 12) -> [(Date, Double)] {
         let allTrips = getAllTrips().filter { $0.status == .completed || $0.status == .delivered }
         let calendar = Calendar.current
+        let now = Date()
 
         var result: [(Date, Double)] = []
         for i in 0..<months {
-            let startOfMonth = calendar.date(byAdding: .month, value: -i, to: Date())!
-            let endOfMonth = calendar.date(byAdding: .month, value: 1, to: startOfMonth)!
+            let monthDate = calendar.date(byAdding: .month, value: -i, to: now)!
+            let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: monthDate))!
+            guard let endOfMonth = calendar.date(byAdding: .month, value: 1, to: startOfMonth) else { continue }
 
             let monthRevenue = allTrips
                 .filter { $0.pickupDate >= startOfMonth && $0.pickupDate < endOfMonth }
@@ -889,8 +1123,8 @@ class DatabaseManager {
         return result.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
     }
 
-    func getFleetUtilization() -> [(VehicleStatus, Int)] {
-        let allVehicles = getAllVehicles()
+    func getFleetUtilization(includeRetired: Bool = false) -> [(VehicleStatus, Int)] {
+        let allVehicles = includeRetired ? getAllVehicles() : getAllVehicles().filter { $0.status != .retired }
         var result: [VehicleStatus: Int] = [:]
 
         for vehicle in allVehicles {
