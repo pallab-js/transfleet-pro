@@ -22,6 +22,14 @@ let package = Package(
                 .product(name: "SQLite", package: "SQLite.swift")
             ],
             path: "Sources"
+        ),
+        .testTarget(
+            name: "TransFleetProTests",
+            dependencies: [
+                "TransFleetProApp",
+                .product(name: "SQLite", package: "SQLite.swift")
+            ],
+            path: "Tests"
         )
     ]
 )

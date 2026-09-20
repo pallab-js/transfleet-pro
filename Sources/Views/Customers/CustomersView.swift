@@ -5,6 +5,7 @@ struct CustomersView: View {
     @State private var showAddCustomer = false
     @State private var selectedCustomer: Customer?
     @State private var customerToDelete: Customer?
+    @State private var pagination = PaginationState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +18,7 @@ struct CustomersView: View {
                 emptyState
             } else {
                 customerTable
+                PaginationView(state: $pagination, totalItems: viewModel.filteredCustomers.count)
             }
         }
         .background(Color(NSColor.windowBackgroundColor))
@@ -48,6 +50,8 @@ struct CustomersView: View {
         .onAppear {
             viewModel.loadData()
         }
+        .onChange(of: viewModel.searchText) { _, _ in pagination.reset() }
+        .onChange(of: viewModel.filterType) { _, _ in pagination.reset() }
     }
 
     private var toolbar: some View {
@@ -80,7 +84,7 @@ struct CustomersView: View {
     }
 
     private var customerTable: some View {
-        Table(viewModel.filteredCustomers) {
+        Table(Array(pagination.page(viewModel.filteredCustomers))) {
             TableColumn("Company") { customer in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(customer.companyName)
@@ -130,6 +134,7 @@ struct CustomersView: View {
                     }) {
                         Image(systemName: "pencil")
                     }
+                    .accessibilityLabel("Edit \(customer.companyName)")
                     .buttonStyle(.borderless)
 
                     Button(action: {
@@ -138,6 +143,7 @@ struct CustomersView: View {
                         Image(systemName: "trash")
                             .foregroundColor(.red)
                     }
+                    .accessibilityLabel("Delete \(customer.companyName)")
                     .buttonStyle(.borderless)
                 }
             }
@@ -186,7 +192,8 @@ struct CustomerFormView: View {
 
     private var isValid: Bool {
         !companyName.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !contactName.trimmingCharacters(in: .whitespaces).isEmpty
+        !contactName.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !phone.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     var body: some View {
@@ -295,7 +302,6 @@ struct CustomerFormView: View {
                 onSave(customerToSave)
             }
             .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.return)
             .disabled(!isValid)
         }
         .padding()

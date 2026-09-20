@@ -36,6 +36,7 @@ struct DashboardView: View {
             }) {
                 Image(systemName: "arrow.clockwise")
             }
+            .accessibilityLabel("Refresh dashboard")
             .buttonStyle(.bordered)
         }
     }
@@ -82,13 +83,15 @@ struct DashboardView: View {
     }
 
     private var chartsSection: some View {
-        HStack(spacing: 16) {
-            ChartCard(title: "Revenue Trend") {
-                RevenueTrendChart(data: viewModel.revenueData)
-            }
+        VStack(spacing: 16) {
+            HStack(spacing: 16) {
+                ChartCard(title: "Revenue Trend") {
+                    RevenueTrendChart(data: viewModel.revenueData)
+                }
 
-            ChartCard(title: "Fleet Utilization") {
-                FleetUtilizationChart(data: viewModel.fleetUtilizationData)
+                ChartCard(title: "Fleet Utilization") {
+                    FleetUtilizationChart(data: viewModel.fleetUtilizationData)
+                }
             }
         }
     }

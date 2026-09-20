@@ -11,7 +11,6 @@ struct ContentView: View {
         } detail: {
             DetailView()
         }
-        .frame(minWidth: 1200, minHeight: 800)
     }
 }
 
@@ -35,10 +34,8 @@ struct SidebarView: View {
             }
 
             Section("Analytics") {
-                ForEach([AppTab.reports]) { tab in
-                    SidebarRow(tab: tab, isSelected: appState.selectedTab == tab)
-                        .tag(tab)
-                }
+                SidebarRow(tab: .reports, isSelected: appState.selectedTab == .reports)
+                    .tag(AppTab.reports)
             }
 
             Section("System") {

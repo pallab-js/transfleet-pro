@@ -22,13 +22,20 @@ class DashboardViewModel: ObservableObject {
     }
 
     func loadData() {
-        stats = DatabaseManager.shared.getDashboardStats()
-        let customers = DatabaseManager.shared.getAllCustomers()
-        let customerMap = Dictionary(uniqueKeysWithValues: customers.map { ($0.id, $0.companyName) })
-        recentTripCustomerNames = customerMap
-        recentTrips = Array(DatabaseManager.shared.getAllTrips().prefix(10))
-        revenueData = DatabaseManager.shared.getRevenueByMonth(months: 6)
-        fleetUtilizationData = DatabaseManager.shared.getFleetUtilization()
+        isLoading = true
+        Task {
+            do {
+                stats = try DatabaseManager.shared.getDashboardStats()
+                let customers = try DatabaseManager.shared.getAllCustomers()
+                recentTripCustomerNames = Dictionary(uniqueKeysWithValues: customers.map { ($0.id, $0.companyName) })
+                recentTrips = Array(try DatabaseManager.shared.getAllTrips().prefix(10))
+                revenueData = try DatabaseManager.shared.getRevenueByMonth(months: 6)
+                fleetUtilizationData = try DatabaseManager.shared.getFleetUtilization()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isLoading = false
+        }
     }
 }
 
@@ -62,23 +69,37 @@ class FleetViewModel: ObservableObject {
     }
 
     func loadData() {
-        vehicles = DatabaseManager.shared.getAllVehicles()
+        isLoading = true
+        Task {
+            do {
+                vehicles = try DatabaseManager.shared.getAllVehicles()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            selectedVehicle = nil
+            isLoading = false
+        }
     }
 
     func deleteVehicle(_ vehicle: Vehicle) {
-        if !DatabaseManager.shared.deleteVehicle(vehicle) {
-            errorMessage = "Failed to delete vehicle"
-            return
+        do {
+            try DatabaseManager.shared.deleteVehicle(vehicle)
+            vehicles.removeAll { $0.id == vehicle.id }
+            if selectedVehicle?.id == vehicle.id {
+                selectedVehicle = nil
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        vehicles.removeAll { $0.id == vehicle.id }
     }
 
     func saveVehicle(_ vehicle: Vehicle) {
-        if !DatabaseManager.shared.saveVehicle(vehicle) {
-            errorMessage = "Failed to save vehicle"
-            return
+        do {
+            try DatabaseManager.shared.saveVehicle(vehicle)
+            loadData()
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        loadData()
     }
 }
 
@@ -112,28 +133,43 @@ class DriverViewModel: ObservableObject {
     }
 
     func loadData() {
-        drivers = DatabaseManager.shared.getAllDrivers()
+        isLoading = true
+        Task {
+            do {
+                drivers = try DatabaseManager.shared.getAllDrivers()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            selectedDriver = nil
+            isLoading = false
+        }
     }
 
     func deleteDriver(_ driver: Driver) {
-        if !DatabaseManager.shared.deleteDriver(driver) {
-            errorMessage = "Failed to delete driver"
-            return
+        do {
+            try DatabaseManager.shared.deleteDriver(driver)
+            drivers.removeAll { $0.id == driver.id }
+            if selectedDriver?.id == driver.id {
+                selectedDriver = nil
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        drivers.removeAll { $0.id == driver.id }
     }
 
     func saveDriver(_ driver: Driver) {
-        if !DatabaseManager.shared.saveDriver(driver) {
-            errorMessage = "Failed to save driver"
-            return
+        do {
+            try DatabaseManager.shared.saveDriver(driver)
+            loadData()
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        loadData()
     }
 
     func isLicenseExpiring(_ driver: Driver, withinDays: Int = 30) -> Bool {
-        let futureDate = Date().addingTimeInterval(Double(withinDays) * 24 * 60 * 60)
-        return driver.licenseExpiry <= futureDate && driver.status == .active
+        let now = Date()
+        let futureDate = now.addingTimeInterval(Double(withinDays) * 24 * 60 * 60)
+        return driver.licenseExpiry > now && driver.licenseExpiry <= futureDate && driver.status == .active
     }
 }
 
@@ -169,26 +205,40 @@ class TripViewModel: ObservableObject {
     }
 
     func loadData() {
-        trips = DatabaseManager.shared.getAllTrips()
-        customers = DatabaseManager.shared.getAllCustomers()
-        drivers = DatabaseManager.shared.getAllDrivers()
-        vehicles = DatabaseManager.shared.getAllVehicles()
+        isLoading = true
+        Task {
+            do {
+                trips = try DatabaseManager.shared.getAllTrips()
+                customers = try DatabaseManager.shared.getAllCustomers()
+                drivers = try DatabaseManager.shared.getAllDrivers()
+                vehicles = try DatabaseManager.shared.getAllVehicles()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            selectedTrip = nil
+            isLoading = false
+        }
     }
 
     func deleteTrip(_ trip: Trip) {
-        if !DatabaseManager.shared.deleteTrip(trip) {
-            errorMessage = "Failed to delete trip"
-            return
+        do {
+            try DatabaseManager.shared.deleteTrip(trip)
+            trips.removeAll { $0.id == trip.id }
+            if selectedTrip?.id == trip.id {
+                selectedTrip = nil
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        trips.removeAll { $0.id == trip.id }
     }
 
     func saveTrip(_ trip: Trip) {
-        if !DatabaseManager.shared.saveTrip(trip) {
-            errorMessage = "Failed to save trip"
-            return
+        do {
+            try DatabaseManager.shared.saveTrip(trip)
+            loadData()
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        loadData()
     }
 
     func customerName(for trip: Trip) -> String {
@@ -202,7 +252,7 @@ class TripViewModel: ObservableObject {
 
     func vehicleName(for trip: Trip) -> String {
         guard let vehicleId = trip.vehicleId else { return "Unassigned" }
-        return vehicles.first { $0.id == vehicleId }?.name ?? "Unknown"
+        return vehicles.first { $0.id == vehicleId }?.displayName ?? "Unknown"
     }
 }
 
@@ -236,23 +286,37 @@ class CustomerViewModel: ObservableObject {
     }
 
     func loadData() {
-        customers = DatabaseManager.shared.getAllCustomers()
+        isLoading = true
+        Task {
+            do {
+                customers = try DatabaseManager.shared.getAllCustomers()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            selectedCustomer = nil
+            isLoading = false
+        }
     }
 
     func deleteCustomer(_ customer: Customer) {
-        if !DatabaseManager.shared.deleteCustomer(customer) {
-            errorMessage = "Failed to delete customer"
-            return
+        do {
+            try DatabaseManager.shared.deleteCustomer(customer)
+            customers.removeAll { $0.id == customer.id }
+            if selectedCustomer?.id == customer.id {
+                selectedCustomer = nil
+            }
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        customers.removeAll { $0.id == customer.id }
     }
 
     func saveCustomer(_ customer: Customer) {
-        if !DatabaseManager.shared.saveCustomer(customer) {
-            errorMessage = "Failed to save customer"
-            return
+        do {
+            try DatabaseManager.shared.saveCustomer(customer)
+            loadData()
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        loadData()
     }
 }
 
@@ -283,41 +347,53 @@ class FinanceViewModel: ObservableObject {
     }
 
     func loadData() {
-        invoices = DatabaseManager.shared.getAllInvoices()
-        expenses = DatabaseManager.shared.getAllExpenses()
-        customers = DatabaseManager.shared.getAllCustomers()
+        isLoading = true
+        Task {
+            do {
+                invoices = try DatabaseManager.shared.getAllInvoices()
+                expenses = try DatabaseManager.shared.getAllExpenses()
+                customers = try DatabaseManager.shared.getAllCustomers()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isLoading = false
+        }
     }
 
     func saveInvoice(_ invoice: Invoice) {
-        if !DatabaseManager.shared.saveInvoice(invoice) {
-            errorMessage = "Failed to save invoice"
-            return
+        do {
+            try DatabaseManager.shared.saveInvoice(invoice)
+            loadData()
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        loadData()
     }
 
     func deleteInvoice(_ invoice: Invoice) {
-        if !DatabaseManager.shared.deleteInvoice(invoice) {
-            errorMessage = "Failed to delete invoice"
-            return
+        do {
+            try DatabaseManager.shared.deleteInvoice(invoice)
+            invoices.removeAll { $0.id == invoice.id }
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        invoices.removeAll { $0.id == invoice.id }
     }
 
     func saveExpense(_ expense: Expense) {
-        if !DatabaseManager.shared.saveExpense(expense) {
-            errorMessage = "Failed to save expense"
-            return
+        do {
+            try DatabaseManager.shared.saveExpense(expense)
+            loadData()
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        loadData()
     }
 
     func deleteExpense(_ expense: Expense) {
-        if !DatabaseManager.shared.deleteExpense(expense) {
-            errorMessage = "Failed to delete expense"
-            return
+        do {
+            try DatabaseManager.shared.deleteExpense(expense)
+            expenses.removeAll { $0.id == expense.id }
+        } catch {
+            errorMessage = error.localizedDescription
         }
-        expenses.removeAll { $0.id == expense.id }
     }
 
     func customerName(for invoice: Invoice) -> String {
@@ -325,7 +401,11 @@ class FinanceViewModel: ObservableObject {
     }
 
     var expensesByCategory: [(ExpenseCategory, Double)] {
-        DatabaseManager.shared.getExpensesByCategory()
+        var result: [ExpenseCategory: Double] = [:]
+        for expense in expenses {
+            result[expense.category, default: 0] += expense.amount
+        }
+        return result.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
     }
 }
 
@@ -344,6 +424,7 @@ class ReportsViewModel: ObservableObject {
     @Published var expenseData: [(ExpenseCategory, Double)] = []
     @Published var fleetUtilizationData: [(VehicleStatus, Int)] = []
     @Published var tripStatusData: [(TripStatus, Int)] = []
+    @Published var errorMessage: String?
 
     var totalRevenue: Double {
         revenueData.reduce(0) { $0 + $1.1 }
@@ -359,10 +440,18 @@ class ReportsViewModel: ObservableObject {
     }
 
     func loadData() {
-        revenueData = DatabaseManager.shared.getRevenueByMonth(months: 12)
-        expenseData = DatabaseManager.shared.getExpensesByCategory()
-        fleetUtilizationData = DatabaseManager.shared.getFleetUtilization()
-        tripStatusData = DatabaseManager.shared.getTripsByStatus()
+        isLoading = true
+        Task {
+            do {
+                revenueData = try DatabaseManager.shared.getRevenueByMonth(months: 12)
+                expenseData = try DatabaseManager.shared.getExpensesByCategory()
+                fleetUtilizationData = try DatabaseManager.shared.getFleetUtilization()
+                tripStatusData = try DatabaseManager.shared.getTripsByStatus()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isLoading = false
+        }
     }
 }
 
@@ -385,8 +474,10 @@ class SettingsViewModel: ObservableObject {
     }
 
     func saveSettings() {
-        if !DatabaseManager.shared.saveSettings(settings) {
-            errorMessage = "Failed to save settings"
+        do {
+            try DatabaseManager.shared.saveSettings(settings)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -396,42 +487,27 @@ class SettingsViewModel: ObservableObject {
     }
 
     func exportData() -> URL? {
-        let vehicles = DatabaseManager.shared.getAllVehicles()
-        let drivers = DatabaseManager.shared.getAllDrivers()
-        let trips = DatabaseManager.shared.getAllTrips()
-        let customers = DatabaseManager.shared.getAllCustomers()
-        let invoices = DatabaseManager.shared.getAllInvoices()
-        let expenses = DatabaseManager.shared.getAllExpenses()
-
-        struct ExportData: Codable {
-            let exportDate: String
-            let vehicles: [Vehicle]
-            let drivers: [Driver]
-            let trips: [Trip]
-            let customers: [Customer]
-            let invoices: [Invoice]
-            let expenses: [Expense]
-        }
-
-        let exportData = ExportData(
-            exportDate: ISO8601DateFormatter().string(from: Date()),
-            vehicles: vehicles,
-            drivers: drivers,
-            trips: trips,
-            customers: customers,
-            invoices: invoices,
-            expenses: expenses
-        )
-
-        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("transfleet_export.json")
-
         do {
-            let data = try JSONEncoder().encode(exportData)
+            let data = try DatabaseManager.shared.exportAllData()
+            let formatter = DateFormatter()
+            formatter.dateFormat = "yyyyMMdd_HHmmss"
+            let timestamp = formatter.string(from: Date())
+            let filename = "transfleet_export_\(timestamp).json"
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
             try data.write(to: tempURL)
             return tempURL
         } catch {
-            print("Export failed: \(error)")
+            errorMessage = error.localizedDescription
             return nil
+        }
+    }
+
+    func importData(from url: URL) {
+        do {
+            let data = try Data(contentsOf: url)
+            try DatabaseManager.shared.importAllData(from: data)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 }

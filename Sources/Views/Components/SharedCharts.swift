@@ -21,6 +21,8 @@ struct RevenueTrendChart: View {
         .chartYAxis {
             AxisMarks(position: .leading)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Revenue trend chart showing monthly revenue data")
     }
 }
 
@@ -37,6 +39,8 @@ struct FleetUtilizationChart: View {
             .foregroundStyle(by: .value("Status", item.0.rawValue))
             .cornerRadius(4)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Fleet utilization chart showing vehicle status distribution")
     }
 }
 
@@ -52,6 +56,8 @@ struct ExpensesByCategoryChart: View {
             .foregroundStyle(Color.red.gradient)
             .cornerRadius(4)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Expenses by category chart")
     }
 }
 
@@ -67,5 +73,7 @@ struct TripStatusDistributionChart: View {
             .foregroundStyle(Color.blue.gradient)
             .cornerRadius(4)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Trip status distribution chart")
     }
 }

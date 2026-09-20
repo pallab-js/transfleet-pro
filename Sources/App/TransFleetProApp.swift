@@ -8,26 +8,52 @@ struct TransFleetProApp: App {
             ContentView()
                 .environmentObject(appState)
                 .frame(minWidth: 1200, minHeight: 800)
+                .alert("Database Error", isPresented: $appState.showDatabaseError) {
+                    Button("Retry") {
+                        appState.retryDatabaseInit()
+                    }
+                    Button("Quit", role: .destructive) {
+                        NSApplication.shared.terminate(nil)
+                    }
+                } message: {
+                    Text(appState.databaseErrorMessage)
+                }
         }
         .windowStyle(.automatic)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Trip") {
-                    appState.showNewTripSheet = true
+                    appState.selectedTab = .trips
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(100))
+                        appState.showNewTripSheet = true
+                    }
                 }
                 .keyboardShortcut("n", modifiers: .command)
 
                 Button("New Vehicle") {
-                    appState.showNewVehicleSheet = true
+                    appState.selectedTab = .fleet
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(100))
+                        appState.showNewVehicleSheet = true
+                    }
                 }
 
                 Button("New Driver") {
-                    appState.showNewDriverSheet = true
+                    appState.selectedTab = .drivers
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(100))
+                        appState.showNewDriverSheet = true
+                    }
                 }
 
                 Button("New Customer") {
-                    appState.showNewCustomerSheet = true
+                    appState.selectedTab = .customers
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(100))
+                        appState.showNewCustomerSheet = true
+                    }
                 }
             }
 
@@ -109,8 +135,18 @@ class AppState: ObservableObject {
     @Published var showNewVehicleSheet = false
     @Published var showNewDriverSheet = false
     @Published var showNewCustomerSheet = false
+    @Published var showDatabaseError = false
+    @Published var databaseErrorMessage = ""
 
     init() {
+        retryDatabaseInit()
+    }
+
+    func retryDatabaseInit() {
         DatabaseManager.shared.initializeDatabase()
+        if let error = DatabaseManager.shared.databaseError {
+            databaseErrorMessage = error
+            showDatabaseError = true
+        }
     }
 }

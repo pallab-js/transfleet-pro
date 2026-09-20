@@ -1,10 +1,13 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @StateObject private var viewModel = SettingsViewModel()
     @State private var showExportSuccess = false
     @State private var showResetSuccess = false
     @State private var showSaveSuccess = false
+    @State private var showResetConfirmation = false
+    @State private var toastTask: Task<Void, Never>?
 
     var body: some View {
         ScrollView {
@@ -39,7 +42,10 @@ struct SettingsView: View {
                 .padding(.bottom, 20)
                 .transition(.move(edge: .bottom).combined(with: .opacity))
                 .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    toastTask?.cancel()
+                    toastTask = Task {
+                        try? await Task.sleep(for: .seconds(3))
+                        guard !Task.isCancelled else { return }
                         withAnimation {
                             showSaveSuccess = false
                             showExportSuccess = false
@@ -213,6 +219,34 @@ struct SettingsView: View {
 
                 HStack {
                     VStack(alignment: .leading) {
+                        Text("Import Data")
+                            .font(.headline)
+                        Text("Restore data from a previously exported JSON file")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Import") {
+                        let panel = NSOpenPanel()
+                        panel.allowedContentTypes = [.json]
+                        panel.allowsMultipleSelection = false
+                        panel.canChooseDirectories = false
+                        if panel.runModal() == .OK, let url = panel.url {
+                            viewModel.importData(from: url)
+                            if viewModel.errorMessage == nil {
+                                showSaveSuccess = true
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+
+                Divider()
+
+                HStack {
+                    VStack(alignment: .leading) {
                         Text("Reset Settings")
                             .font(.headline)
                         Text("Reset all settings to default values")
@@ -223,8 +257,7 @@ struct SettingsView: View {
                     Spacer()
 
                     Button("Reset") {
-                        viewModel.resetToDefaults()
-                        showResetSuccess = true
+                        showResetConfirmation = true
                     }
                     .buttonStyle(.bordered)
                 }
@@ -232,6 +265,19 @@ struct SettingsView: View {
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(12)
+        }
+        .confirmationDialog(
+            "Reset Settings",
+            isPresented: $showResetConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Reset All Settings", role: .destructive) {
+                viewModel.resetToDefaults()
+                showResetSuccess = true
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will reset all business settings to their default values. This action cannot be undone.")
         }
     }
 

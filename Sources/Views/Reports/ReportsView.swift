@@ -45,6 +45,7 @@ struct ReportsView: View {
             Button(action: { viewModel.loadData() }) {
                 Image(systemName: "arrow.clockwise")
             }
+            .accessibilityLabel("Refresh reports")
             .buttonStyle(.bordered)
         }
         .padding()

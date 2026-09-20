@@ -12,6 +12,7 @@ DerivedData/
 
 # Swift Package Manager
 .build/
+.swiftpm/
 
 # macOS
 .DS_Store
@@ -24,3 +25,5 @@ TransFleetPro.xcodeproj
 # TransFleet Pro specific
 transfleet.sqlite3
 
+# Test artifacts
+Tests/.build/

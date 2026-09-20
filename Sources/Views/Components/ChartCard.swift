@@ -10,13 +10,8 @@ struct ChartCard<Content: View>: View {
             Text(title)
                 .font(.headline)
 
-            if #available(macOS 14.0, *) {
-                content
-                    .frame(height: 200)
-            } else {
-                Text("Chart requires macOS 14+")
-                    .frame(height: 200)
-            }
+            content
+                .frame(height: 200)
         }
         .padding()
         .frame(maxWidth: .infinity)

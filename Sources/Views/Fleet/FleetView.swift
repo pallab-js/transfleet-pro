@@ -5,6 +5,7 @@ struct FleetView: View {
     @State private var showAddVehicle = false
     @State private var selectedVehicle: Vehicle?
     @State private var vehicleToDelete: Vehicle?
+    @State private var pagination = PaginationState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +18,7 @@ struct FleetView: View {
                 emptyState
             } else {
                 vehicleTable
+                PaginationView(state: $pagination, totalItems: viewModel.filteredVehicles.count)
             }
         }
         .background(Color(NSColor.windowBackgroundColor))
@@ -48,6 +50,8 @@ struct FleetView: View {
         .onAppear {
             viewModel.loadData()
         }
+        .onChange(of: viewModel.searchText) { _, _ in pagination.reset() }
+        .onChange(of: viewModel.filterStatus) { _, _ in pagination.reset() }
     }
 
     private var toolbar: some View {
@@ -80,7 +84,7 @@ struct FleetView: View {
     }
 
     private var vehicleTable: some View {
-        Table(viewModel.filteredVehicles) {
+        Table(Array(pagination.page(viewModel.filteredVehicles))) {
             TableColumn("Name") { vehicle in
                 Text(vehicle.name)
                     .fontWeight(.medium)
@@ -105,7 +109,7 @@ struct FleetView: View {
             .width(min: 150, ideal: 200)
 
             TableColumn("Status") { vehicle in
-                StatusBadge(status: vehicle.status.rawValue, color: statusColor(vehicle.status))
+                StatusBadge(status: vehicle.status.rawValue, color: vehicle.status.color)
             }
             .width(100)
 
@@ -123,6 +127,7 @@ struct FleetView: View {
                     }) {
                         Image(systemName: "pencil")
                     }
+                    .accessibilityLabel("Edit \(vehicle.name)")
                     .buttonStyle(.borderless)
 
                     Button(action: {
@@ -131,6 +136,7 @@ struct FleetView: View {
                         Image(systemName: "trash")
                             .foregroundColor(.red)
                     }
+                    .accessibilityLabel("Delete \(vehicle.name)")
                     .buttonStyle(.borderless)
                 }
             }
@@ -155,14 +161,6 @@ struct FleetView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func statusColor(_ status: VehicleStatus) -> Color {
-        switch status {
-        case .available: return .green
-        case .inUse: return .blue
-        case .maintenance: return .orange
-        case .retired: return .gray
-        }
-    }
 }
 
 struct VehicleFormView: View {
@@ -183,7 +181,8 @@ struct VehicleFormView: View {
 
     private var isValid: Bool {
         !name.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !licensePlate.trimmingCharacters(in: .whitespaces).isEmpty
+        !licensePlate.trimmingCharacters(in: .whitespaces).isEmpty &&
+        year >= 1900 && year <= Calendar.current.component(.year, from: Date()) + 1
     }
 
     var body: some View {
@@ -281,42 +280,9 @@ struct VehicleFormView: View {
                 onSave(vehicleToSave)
             }
             .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.return)
             .disabled(!isValid)
         }
         .padding()
     }
 }
 
-struct StatusBadge: View {
-    let status: String
-    let color: Color
-
-    var body: some View {
-        Text(status)
-            .font(.caption)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(color.opacity(0.2))
-            .foregroundColor(color)
-            .cornerRadius(4)
-    }
-}
-
-struct SearchField: View {
-    @Binding var text: String
-    let placeholder: String
-
-    var body: some View {
-        HStack {
-            Image(systemName: "magnifyingglass")
-                .foregroundColor(.secondary)
-            TextField(placeholder, text: $text)
-                .textFieldStyle(.plain)
-        }
-        .padding(8)
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
-        .frame(width: 200)
-    }
-}

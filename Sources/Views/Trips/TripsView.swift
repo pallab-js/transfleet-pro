@@ -5,6 +5,7 @@ struct TripsView: View {
     @State private var showAddTrip = false
     @State private var selectedTrip: Trip?
     @State private var tripToDelete: Trip?
+    @State private var pagination = PaginationState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +18,7 @@ struct TripsView: View {
                 emptyState
             } else {
                 tripTable
+                PaginationView(state: $pagination, totalItems: viewModel.filteredTrips.count)
             }
         }
         .background(Color(NSColor.windowBackgroundColor))
@@ -48,6 +50,8 @@ struct TripsView: View {
         .onAppear {
             viewModel.loadData()
         }
+        .onChange(of: viewModel.searchText) { _, _ in pagination.reset() }
+        .onChange(of: viewModel.filterStatus) { _, _ in pagination.reset() }
     }
 
     private var toolbar: some View {
@@ -80,7 +84,7 @@ struct TripsView: View {
     }
 
     private var tripTable: some View {
-        Table(viewModel.filteredTrips) {
+        Table(Array(pagination.page(viewModel.filteredTrips))) {
             TableColumn("Job #") { trip in
                 Text(trip.jobNumber)
                     .font(.system(.body, design: .monospaced))
@@ -140,6 +144,7 @@ struct TripsView: View {
                     }) {
                         Image(systemName: "pencil")
                     }
+                    .accessibilityLabel("Edit trip \(trip.jobNumber)")
                     .buttonStyle(.borderless)
 
                     Button(action: {
@@ -148,6 +153,7 @@ struct TripsView: View {
                         Image(systemName: "trash")
                             .foregroundColor(.red)
                     }
+                    .accessibilityLabel("Delete trip \(trip.jobNumber)")
                     .buttonStyle(.borderless)
                 }
             }
@@ -209,8 +215,12 @@ struct TripFormView: View {
     private var isValid: Bool {
         !pickupAddress.trimmingCharacters(in: .whitespaces).isEmpty &&
         !pickupCity.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !pickupState.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !pickupZip.trimmingCharacters(in: .whitespaces).isEmpty &&
         !deliveryAddress.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !deliveryCity.trimmingCharacters(in: .whitespaces).isEmpty
+        !deliveryCity.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !deliveryState.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !deliveryZip.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     var body: some View {
@@ -376,7 +386,6 @@ struct TripFormView: View {
             }
             .disabled(customers.isEmpty || !isValid)
             .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.return)
         }
         .padding()
     }

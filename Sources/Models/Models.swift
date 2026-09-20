@@ -24,15 +24,6 @@ enum VehicleStatus: String, CaseIterable, Codable {
     case inUse = "In Use"
     case maintenance = "Maintenance"
     case retired = "Retired"
-
-    var color: String {
-        switch self {
-        case .available: return "green"
-        case .inUse: return "blue"
-        case .maintenance: return "orange"
-        case .retired: return "gray"
-        }
-    }
 }
 
 enum FuelType: String, CaseIterable, Codable {
@@ -352,7 +343,7 @@ struct BusinessSettings: Codable, Hashable {
 }
 
 // MARK: - Dashboard Stats
-struct DashboardStats {
+struct DashboardStats: Codable, Hashable {
     var totalVehicles: Int
     var activeVehicles: Int
     var totalDrivers: Int

@@ -5,6 +5,7 @@ struct DriversView: View {
     @State private var showAddDriver = false
     @State private var selectedDriver: Driver?
     @State private var driverToDelete: Driver?
+    @State private var pagination = PaginationState()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,6 +18,7 @@ struct DriversView: View {
                 emptyState
             } else {
                 driverTable
+                PaginationView(state: $pagination, totalItems: viewModel.filteredDrivers.count)
             }
         }
         .background(Color(NSColor.windowBackgroundColor))
@@ -48,6 +50,8 @@ struct DriversView: View {
         .onAppear {
             viewModel.loadData()
         }
+        .onChange(of: viewModel.searchText) { _, _ in pagination.reset() }
+        .onChange(of: viewModel.filterStatus) { _, _ in pagination.reset() }
     }
 
     private var toolbar: some View {
@@ -80,7 +84,7 @@ struct DriversView: View {
     }
 
     private var driverTable: some View {
-        Table(viewModel.filteredDrivers) {
+        Table(Array(pagination.page(viewModel.filteredDrivers))) {
             TableColumn("Name") { driver in
                 HStack(spacing: 8) {
                     Image(systemName: "person.circle.fill")
@@ -114,7 +118,7 @@ struct DriversView: View {
             .width(min: 150, ideal: 180)
 
             TableColumn("Status") { driver in
-                StatusBadge(status: driver.status.rawValue, color: statusColor(driver.status))
+                StatusBadge(status: driver.status.rawValue, color: driver.status.color)
             }
             .width(100)
 
@@ -135,6 +139,7 @@ struct DriversView: View {
                     }) {
                         Image(systemName: "pencil")
                     }
+                    .accessibilityLabel("Edit \(driver.fullName)")
                     .buttonStyle(.borderless)
 
                     Button(action: {
@@ -143,6 +148,7 @@ struct DriversView: View {
                         Image(systemName: "trash")
                             .foregroundColor(.red)
                     }
+                    .accessibilityLabel("Delete \(driver.fullName)")
                     .buttonStyle(.borderless)
                 }
             }
@@ -167,14 +173,6 @@ struct DriversView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func statusColor(_ status: DriverStatus) -> Color {
-        switch status {
-        case .active: return .green
-        case .onLeave: return .orange
-        case .suspended: return .red
-        case .terminated: return .gray
-        }
-    }
 }
 
 struct DriverFormView: View {
@@ -199,7 +197,13 @@ struct DriverFormView: View {
     private var isValid: Bool {
         !firstName.trimmingCharacters(in: .whitespaces).isEmpty &&
         !lastName.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !licenseNumber.trimmingCharacters(in: .whitespaces).isEmpty
+        !licenseNumber.trimmingCharacters(in: .whitespaces).isEmpty &&
+        !phone.trimmingCharacters(in: .whitespaces).isEmpty &&
+        (email.isEmpty || isValidEmail(email))
+    }
+
+    private func isValidEmail(_ email: String) -> Bool {
+        email.contains("@") && email.contains(".")
     }
 
     var body: some View {
@@ -303,7 +307,6 @@ struct DriverFormView: View {
                 onSave(driverToSave)
             }
             .buttonStyle(.borderedProminent)
-            .keyboardShortcut(.return)
             .disabled(!isValid)
         }
         .padding()

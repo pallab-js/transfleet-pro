@@ -3,12 +3,27 @@ import SQLite
 
 typealias SQLExpression = SQLite.Expression
 
+enum DatabaseError: Error, LocalizedError {
+    case notConnected
+    case saveFailed(String)
+    case deleteFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .notConnected: return "Database not connected"
+        case .saveFailed(let msg): return "Save failed: \(msg)"
+        case .deleteFailed(let msg): return "Delete failed: \(msg)"
+        }
+    }
+}
+
 @MainActor
-class DatabaseManager {
+final class DatabaseManager: DatabaseManagerProtocol {
     static let shared = DatabaseManager()
 
     private var db: Connection?
     private let dbPath: String
+    private(set) var databaseError: String?
 
     // MARK: - Tables
     private let vehicles = Table("vehicles")
@@ -20,6 +35,7 @@ class DatabaseManager {
     private let tripUpdates = Table("trip_updates")
     private let customers = Table("customers")
     private let invoices = Table("invoices")
+    private let invoiceTrips = Table("invoice_trips")
     private let expenses = Table("expenses")
     private let settings = Table("settings")
 
@@ -126,6 +142,10 @@ class DatabaseManager {
     private let invoiceStatus = SQLExpression<String>("status")
     private let paidDate = SQLExpression<Double?>("paid_date")
 
+    // MARK: - Invoice Trips Junction Columns
+    private let invoiceTripInvoiceId = SQLExpression<String>("invoice_id")
+    private let invoiceTripTripId = SQLExpression<String>("trip_id")
+
     // MARK: - Expense Columns
     private let category = SQLExpression<String>("category")
     private let expenseVendor = SQLExpression<String?>("vendor")
@@ -138,6 +158,8 @@ class DatabaseManager {
     private let settingsKey = SQLExpression<String>("key")
     private let settingsValue = SQLExpression<String>("value")
 
+    private static let currentSchemaVersion: Int32 = 3
+
     private init() {
         let fileManager = FileManager.default
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -148,21 +170,54 @@ class DatabaseManager {
         dbPath = appFolder.appendingPathComponent("transfleet.sqlite3").path
     }
 
+    // MARK: - Database Initialization
+
     func initializeDatabase() {
         do {
             db = try Connection(dbPath)
+            try db!.run("PRAGMA foreign_keys = ON")
+            migrateIfNeeded()
             createTables()
-
+            databaseError = nil
         } catch {
-            print("Database connection failed: \(error)")
+            let msg = "Failed to initialize database: \(error.localizedDescription)"
+            databaseError = msg
+            print(msg)
         }
     }
+
+    // MARK: - Schema Migration
+
+    private func migrateIfNeeded() {
+        guard let db = db else { return }
+        do {
+            let version = try db.scalar("PRAGMA user_version") as! Int64
+            if version < 1 {
+                createTables()
+            }
+            if version < 2 {
+                // Migration for version 2 would go here
+            }
+            if version < 3 {
+                // Migration: add invoice_trips junction table
+                try db.run(invoiceTrips.create(ifNotExists: true) { t in
+                    t.column(invoiceTripInvoiceId)
+                    t.column(invoiceTripTripId)
+                    t.primaryKey(invoiceTripInvoiceId, invoiceTripTripId)
+                })
+            }
+            try db.run("PRAGMA user_version = \(Self.currentSchemaVersion)")
+        } catch {
+            print("Schema migration failed: \(error)")
+        }
+    }
+
+    // MARK: - Table Creation
 
     private func createTables() {
         guard let db = db else { return }
 
         do {
-            // Vehicles table
             try db.run(vehicles.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(name)
@@ -182,7 +237,6 @@ class DatabaseManager {
                 t.column(updatedAt)
             })
 
-            // Maintenance records table
             try db.run(maintenanceRecords.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(vehicleId)
@@ -196,7 +250,6 @@ class DatabaseManager {
                 t.column(createdAt)
             })
 
-            // Fuel logs table
             try db.run(fuelLogs.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(vehicleId)
@@ -211,7 +264,6 @@ class DatabaseManager {
                 t.column(createdAt)
             })
 
-            // Drivers table
             try db.run(drivers.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(firstName)
@@ -233,7 +285,6 @@ class DatabaseManager {
                 t.column(updatedAt)
             })
 
-            // Certifications table
             try db.run(certifications.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(driverId)
@@ -245,13 +296,12 @@ class DatabaseManager {
                 t.column(createdAt)
             })
 
-            // Trips table
             try db.run(trips.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(jobNumber, unique: true)
                 t.column(customerId)
-                t.column(driverId)
-                t.column(vehicleId)
+                t.column(tripDriverId)
+                t.column(tripVehicleId)
                 t.column(tripStatus)
                 t.column(pickupAddress)
                 t.column(pickupCity)
@@ -274,7 +324,6 @@ class DatabaseManager {
                 t.column(updatedAt)
             })
 
-            // Trip updates table
             try db.run(tripUpdates.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(tripId)
@@ -284,7 +333,6 @@ class DatabaseManager {
                 t.column(notes)
             })
 
-            // Customers table
             try db.run(customers.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(companyName)
@@ -304,7 +352,6 @@ class DatabaseManager {
                 t.column(updatedAt)
             })
 
-            // Invoices table
             try db.run(invoices.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(invoiceNumber, unique: true)
@@ -322,7 +369,12 @@ class DatabaseManager {
                 t.column(updatedAt)
             })
 
-            // Expenses table
+            try db.run(invoiceTrips.create(ifNotExists: true) { t in
+                t.column(invoiceTripInvoiceId)
+                t.column(invoiceTripTripId)
+                t.primaryKey(invoiceTripInvoiceId, invoiceTripTripId)
+            })
+
             try db.run(expenses.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(category)
@@ -337,691 +389,798 @@ class DatabaseManager {
                 t.column(createdAt)
             })
 
-            // Settings table
             try db.run(settings.create(ifNotExists: true) { t in
                 t.column(settingsKey, primaryKey: true)
                 t.column(settingsValue)
             })
 
         } catch {
-            print("Table creation failed: \(error)")
+            let msg = "Table creation failed: \(error)"
+            databaseError = msg
+            print(msg)
+        }
+    }
+
+    // MARK: - Transaction Helper
+
+    private func transaction(_ block: () throws -> Void) throws {
+        guard let db = db else {
+            throw DatabaseError.notConnected
+        }
+        try db.transaction {
+            try block()
         }
     }
 
     // MARK: - Vehicle CRUD
-    func saveVehicle(_ vehicle: Vehicle) -> Bool {
-        guard let db = db else { return false }
 
-        do {
-            let insert = vehicles.insert(or: .replace,
-                id <- vehicle.id.uuidString,
-                name <- vehicle.name,
-                type <- vehicle.type.rawValue,
-                licensePlate <- vehicle.licensePlate,
-                make <- vehicle.make,
-                model <- vehicle.model,
-                year <- vehicle.year,
-                vin <- vehicle.vin,
-                status <- vehicle.status.rawValue,
-                purchaseDate <- vehicle.purchaseDate?.timeIntervalSince1970,
-                purchasePrice <- vehicle.purchasePrice,
-                currentOdometer <- vehicle.currentOdometer,
-                fuelType <- vehicle.fuelType.rawValue,
-                notes <- vehicle.notes,
-                createdAt <- vehicle.createdAt.timeIntervalSince1970,
-                updatedAt <- Date().timeIntervalSince1970
-            )
-            try db.run(insert)
-            return true
-        } catch {
-            print("Save vehicle failed: \(error)")
-            return false
+    func saveVehicle(_ vehicle: Vehicle) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let existing = try db.pluck(vehicles.filter(id == vehicle.id.uuidString))
+            if existing != nil {
+                let row = vehicles.filter(id == vehicle.id.uuidString)
+                try db.run(row.update(
+                    name <- vehicle.name,
+                    type <- vehicle.type.rawValue,
+                    licensePlate <- vehicle.licensePlate,
+                    make <- vehicle.make,
+                    model <- vehicle.model,
+                    year <- vehicle.year,
+                    vin <- vehicle.vin,
+                    status <- vehicle.status.rawValue,
+                    purchaseDate <- vehicle.purchaseDate?.timeIntervalSince1970,
+                    purchasePrice <- vehicle.purchasePrice,
+                    currentOdometer <- vehicle.currentOdometer,
+                    fuelType <- vehicle.fuelType.rawValue,
+                    notes <- vehicle.notes,
+                    updatedAt <- Date().timeIntervalSince1970
+                ))
+            } else {
+                try db.run(vehicles.insert(
+                    id <- vehicle.id.uuidString,
+                    name <- vehicle.name,
+                    type <- vehicle.type.rawValue,
+                    licensePlate <- vehicle.licensePlate,
+                    make <- vehicle.make,
+                    model <- vehicle.model,
+                    year <- vehicle.year,
+                    vin <- vehicle.vin,
+                    status <- vehicle.status.rawValue,
+                    purchaseDate <- vehicle.purchaseDate?.timeIntervalSince1970,
+                    purchasePrice <- vehicle.purchasePrice,
+                    currentOdometer <- vehicle.currentOdometer,
+                    fuelType <- vehicle.fuelType.rawValue,
+                    notes <- vehicle.notes,
+                    createdAt <- vehicle.createdAt.timeIntervalSince1970,
+                    updatedAt <- Date().timeIntervalSince1970
+                ))
+            }
         }
     }
 
-    func getAllVehicles() -> [Vehicle] {
-        guard let db = db else { return [] }
-
+    func getAllVehicles() throws -> [Vehicle] {
+        guard let db = db else { throw DatabaseError.notConnected }
         var result: [Vehicle] = []
-        do {
-            for row in try db.prepare(vehicles.order(createdAt.desc)) {
-                var vehicle = Vehicle(
-                    name: row[name],
-                    type: VehicleType(rawValue: row[type]) ?? .truck,
-                    licensePlate: row[licensePlate],
-                    make: row[make],
-                    model: row[model],
-                    year: row[year],
-                    vin: row[vin],
-                    status: VehicleStatus(rawValue: row[status]) ?? .available,
-                    currentOdometer: row[currentOdometer],
-                    fuelType: FuelType(rawValue: row[fuelType]) ?? .diesel,
-                    notes: row[notes]
-                )
-                vehicle.id = UUID(uuidString: row[id]) ?? UUID()
-                if let pd = row[purchaseDate] {
-                    vehicle.purchaseDate = Date(timeIntervalSince1970: pd)
-                }
-                vehicle.purchasePrice = row[purchasePrice]
-                vehicle.createdAt = Date(timeIntervalSince1970: row[createdAt])
-                vehicle.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
-                result.append(vehicle)
+        for row in try db.prepare(vehicles.order(createdAt.desc)) {
+            var vehicle = Vehicle(
+                name: row[name],
+                type: VehicleType(rawValue: row[type]) ?? .truck,
+                licensePlate: row[licensePlate],
+                make: row[make],
+                model: row[model],
+                year: row[year],
+                vin: row[vin],
+                status: VehicleStatus(rawValue: row[status]) ?? .available,
+                currentOdometer: row[currentOdometer],
+                fuelType: FuelType(rawValue: row[fuelType]) ?? .diesel,
+                notes: row[notes]
+            )
+            vehicle.id = UUID(uuidString: row[id]) ?? UUID()
+            if let pd = row[purchaseDate] {
+                vehicle.purchaseDate = Date(timeIntervalSince1970: pd)
             }
-        } catch {
-            print("Get vehicles failed: \(error)")
+            vehicle.purchasePrice = row[purchasePrice]
+            vehicle.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            vehicle.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
+            result.append(vehicle)
         }
         return result
     }
 
-    func deleteVehicle(_ vehicle: Vehicle) -> Bool {
-        guard let db = db else { return false }
-
-        do {
-            let vehicleRow = vehicles.filter(id == vehicle.id.uuidString)
+    func deleteVehicle(_ vehicle: Vehicle) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let vid = vehicle.id.uuidString
+            let relatedMaintenance = maintenanceRecords.filter(self.vehicleId == vid)
+            try db.run(relatedMaintenance.delete())
+            let relatedFuel = fuelLogs.filter(self.vehicleId == vid)
+            try db.run(relatedFuel.delete())
+            let relatedExpenses = expenses.filter(expenseVehicleId == vid)
+            try db.run(relatedExpenses.delete())
+            let vehicleRow = vehicles.filter(id == vid)
             try db.run(vehicleRow.delete())
-            return true
-        } catch {
-            print("Delete vehicle failed: \(error)")
-            return false
         }
     }
 
     // MARK: - Driver CRUD
-    func saveDriver(_ driver: Driver) -> Bool {
-        guard let db = db else { return false }
 
-        do {
-            let insert = drivers.insert(or: .replace,
-                id <- driver.id.uuidString,
-                firstName <- driver.firstName,
-                lastName <- driver.lastName,
-                email <- driver.email,
-                phone <- driver.phone,
-                address <- driver.address,
-                emergencyContact <- driver.emergencyContact,
-                emergencyPhone <- driver.emergencyPhone,
-                licenseNumber <- driver.licenseNumber,
-                licenseState <- driver.licenseState,
-                licenseExpiry <- driver.licenseExpiry.timeIntervalSince1970,
-                status <- driver.status.rawValue,
-                hireDate <- driver.hireDate.timeIntervalSince1970,
-                terminationDate <- driver.terminationDate?.timeIntervalSince1970,
-                notes <- driver.notes,
-                rating <- driver.rating,
-                createdAt <- driver.createdAt.timeIntervalSince1970,
-                updatedAt <- Date().timeIntervalSince1970
-            )
-            try db.run(insert)
-            return true
-        } catch {
-            print("Save driver failed: \(error)")
-            return false
+    func saveDriver(_ driver: Driver) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let existing = try db.pluck(drivers.filter(id == driver.id.uuidString))
+            if existing != nil {
+                let row = drivers.filter(id == driver.id.uuidString)
+                try db.run(row.update(
+                    firstName <- driver.firstName,
+                    lastName <- driver.lastName,
+                    email <- driver.email,
+                    phone <- driver.phone,
+                    address <- driver.address,
+                    emergencyContact <- driver.emergencyContact,
+                    emergencyPhone <- driver.emergencyPhone,
+                    licenseNumber <- driver.licenseNumber,
+                    licenseState <- driver.licenseState,
+                    licenseExpiry <- driver.licenseExpiry.timeIntervalSince1970,
+                    status <- driver.status.rawValue,
+                    hireDate <- driver.hireDate.timeIntervalSince1970,
+                    terminationDate <- driver.terminationDate?.timeIntervalSince1970,
+                    notes <- driver.notes,
+                    rating <- driver.rating,
+                    updatedAt <- Date().timeIntervalSince1970
+                ))
+            } else {
+                try db.run(drivers.insert(
+                    id <- driver.id.uuidString,
+                    firstName <- driver.firstName,
+                    lastName <- driver.lastName,
+                    email <- driver.email,
+                    phone <- driver.phone,
+                    address <- driver.address,
+                    emergencyContact <- driver.emergencyContact,
+                    emergencyPhone <- driver.emergencyPhone,
+                    licenseNumber <- driver.licenseNumber,
+                    licenseState <- driver.licenseState,
+                    licenseExpiry <- driver.licenseExpiry.timeIntervalSince1970,
+                    status <- driver.status.rawValue,
+                    hireDate <- driver.hireDate.timeIntervalSince1970,
+                    terminationDate <- driver.terminationDate?.timeIntervalSince1970,
+                    notes <- driver.notes,
+                    rating <- driver.rating,
+                    createdAt <- driver.createdAt.timeIntervalSince1970,
+                    updatedAt <- Date().timeIntervalSince1970
+                ))
+            }
         }
     }
 
-    func getAllDrivers() -> [Driver] {
-        guard let db = db else { return [] }
-
+    func getAllDrivers() throws -> [Driver] {
+        guard let db = db else { throw DatabaseError.notConnected }
         var result: [Driver] = []
-        do {
-            for row in try db.prepare(drivers.order(createdAt.desc)) {
-                var driver = Driver(
-                    firstName: row[firstName],
-                    lastName: row[lastName],
-                    email: row[email],
-                    phone: row[phone],
-                    address: row[address],
-                    emergencyContact: row[emergencyContact],
-                    emergencyPhone: row[emergencyPhone],
-                    licenseNumber: row[licenseNumber],
-                    licenseState: row[licenseState],
-                    licenseExpiry: Date(timeIntervalSince1970: row[licenseExpiry]),
-                    status: DriverStatus(rawValue: row[status]) ?? .active,
-                    hireDate: Date(timeIntervalSince1970: row[hireDate]),
-                    terminationDate: row[terminationDate].map { Date(timeIntervalSince1970: $0) },
-                    notes: row[notes],
-                    rating: row[rating]
-                )
-                driver.id = UUID(uuidString: row[id]) ?? UUID()
-                driver.createdAt = Date(timeIntervalSince1970: row[createdAt])
-                driver.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
-                result.append(driver)
-            }
-        } catch {
-            print("Get drivers failed: \(error)")
+        for row in try db.prepare(drivers.order(createdAt.desc)) {
+            var driver = Driver(
+                firstName: row[firstName],
+                lastName: row[lastName],
+                email: row[email],
+                phone: row[phone],
+                address: row[address],
+                emergencyContact: row[emergencyContact],
+                emergencyPhone: row[emergencyPhone],
+                licenseNumber: row[licenseNumber],
+                licenseState: row[licenseState],
+                licenseExpiry: Date(timeIntervalSince1970: row[licenseExpiry]),
+                status: DriverStatus(rawValue: row[status]) ?? .active,
+                hireDate: Date(timeIntervalSince1970: row[hireDate]),
+                terminationDate: row[terminationDate].map { Date(timeIntervalSince1970: $0) },
+                notes: row[notes],
+                rating: row[rating]
+            )
+            driver.id = UUID(uuidString: row[id]) ?? UUID()
+            driver.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            driver.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
+            result.append(driver)
         }
         return result
     }
 
-    func deleteDriver(_ driver: Driver) -> Bool {
-        guard let db = db else { return false }
-
-        do {
-            let driverRow = drivers.filter(id == driver.id.uuidString)
+    func deleteDriver(_ driver: Driver) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let did = driver.id.uuidString
+            let relatedCerts = certifications.filter(self.driverId == did)
+            try db.run(relatedCerts.delete())
+            let relatedExpenses = expenses.filter(expenseDriverId == did)
+            try db.run(relatedExpenses.delete())
+            let driverRow = drivers.filter(id == did)
             try db.run(driverRow.delete())
-            return true
-        } catch {
-            print("Delete driver failed: \(error)")
-            return false
         }
     }
 
     // MARK: - Trip CRUD
-    func saveTrip(_ trip: Trip) -> Bool {
-        guard let db = db else { return false }
 
-        do {
-            let insert = trips.insert(or: .replace,
-                id <- trip.id.uuidString,
-                jobNumber <- trip.jobNumber,
-                customerId <- trip.customerId.uuidString,
-                tripDriverId <- trip.driverId?.uuidString,
-                tripVehicleId <- trip.vehicleId?.uuidString,
-                tripStatus <- trip.status.rawValue,
-                pickupAddress <- trip.pickupAddress,
-                pickupCity <- trip.pickupCity,
-                pickupState <- trip.pickupState,
-                pickupZip <- trip.pickupZip,
-                pickupDate <- trip.pickupDate.timeIntervalSince1970,
-                deliveryAddress <- trip.deliveryAddress,
-                deliveryCity <- trip.deliveryCity,
-                deliveryState <- trip.deliveryState,
-                deliveryZip <- trip.deliveryZip,
-                deliveryDate <- trip.deliveryDate?.timeIntervalSince1970,
-                distance <- trip.distance,
-                cargoDescription <- trip.cargoDescription,
-                rate <- trip.rate,
-                fuelSurcharge <- trip.fuelSurcharge,
-                totalAmount <- trip.totalAmount,
-                notes <- trip.notes,
-                createdAt <- trip.createdAt.timeIntervalSince1970,
-                updatedAt <- Date().timeIntervalSince1970
-            )
-            try db.run(insert)
-            return true
-        } catch {
-            print("Save trip failed: \(error)")
-            return false
+    func saveTrip(_ trip: Trip) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let existing = try db.pluck(trips.filter(id == trip.id.uuidString))
+            if existing != nil {
+                let row = trips.filter(id == trip.id.uuidString)
+                try db.run(row.update(
+                    jobNumber <- trip.jobNumber,
+                    customerId <- trip.customerId.uuidString,
+                    tripDriverId <- trip.driverId?.uuidString,
+                    tripVehicleId <- trip.vehicleId?.uuidString,
+                    tripStatus <- trip.status.rawValue,
+                    pickupAddress <- trip.pickupAddress,
+                    pickupCity <- trip.pickupCity,
+                    pickupState <- trip.pickupState,
+                    pickupZip <- trip.pickupZip,
+                    pickupDate <- trip.pickupDate.timeIntervalSince1970,
+                    deliveryAddress <- trip.deliveryAddress,
+                    deliveryCity <- trip.deliveryCity,
+                    deliveryState <- trip.deliveryState,
+                    deliveryZip <- trip.deliveryZip,
+                    deliveryDate <- trip.deliveryDate?.timeIntervalSince1970,
+                    distance <- trip.distance,
+                    cargoDescription <- trip.cargoDescription,
+                    cargoWeight <- trip.cargoWeight,
+                    rate <- trip.rate,
+                    fuelSurcharge <- trip.fuelSurcharge,
+                    totalAmount <- trip.totalAmount,
+                    notes <- trip.notes,
+                    updatedAt <- Date().timeIntervalSince1970
+                ))
+            } else {
+                try db.run(trips.insert(
+                    id <- trip.id.uuidString,
+                    jobNumber <- trip.jobNumber,
+                    customerId <- trip.customerId.uuidString,
+                    tripDriverId <- trip.driverId?.uuidString,
+                    tripVehicleId <- trip.vehicleId?.uuidString,
+                    tripStatus <- trip.status.rawValue,
+                    pickupAddress <- trip.pickupAddress,
+                    pickupCity <- trip.pickupCity,
+                    pickupState <- trip.pickupState,
+                    pickupZip <- trip.pickupZip,
+                    pickupDate <- trip.pickupDate.timeIntervalSince1970,
+                    deliveryAddress <- trip.deliveryAddress,
+                    deliveryCity <- trip.deliveryCity,
+                    deliveryState <- trip.deliveryState,
+                    deliveryZip <- trip.deliveryZip,
+                    deliveryDate <- trip.deliveryDate?.timeIntervalSince1970,
+                    distance <- trip.distance,
+                    cargoDescription <- trip.cargoDescription,
+                    cargoWeight <- trip.cargoWeight,
+                    rate <- trip.rate,
+                    fuelSurcharge <- trip.fuelSurcharge,
+                    totalAmount <- trip.totalAmount,
+                    notes <- trip.notes,
+                    createdAt <- trip.createdAt.timeIntervalSince1970,
+                    updatedAt <- Date().timeIntervalSince1970
+                ))
+            }
         }
     }
 
-    func getAllTrips() -> [Trip] {
-        guard let db = db else { return [] }
-
+    func getAllTrips() throws -> [Trip] {
+        guard let db = db else { throw DatabaseError.notConnected }
         var result: [Trip] = []
-        do {
-            for row in try db.prepare(trips.order(pickupDate.desc)) {
-                var trip = Trip(
-                    jobNumber: row[jobNumber],
-                    customerId: UUID(uuidString: row[customerId]) ?? UUID(),
-                    driverId: row[tripDriverId].flatMap { UUID(uuidString: $0) },
-                    vehicleId: row[tripVehicleId].flatMap { UUID(uuidString: $0) },
-                    status: TripStatus(rawValue: row[tripStatus]) ?? .pending,
-                    pickupAddress: row[pickupAddress],
-                    pickupCity: row[pickupCity],
-                    pickupState: row[pickupState],
-                    pickupZip: row[pickupZip],
-                    pickupDate: Date(timeIntervalSince1970: row[pickupDate]),
-                    deliveryAddress: row[deliveryAddress],
-                    deliveryCity: row[deliveryCity],
-                    deliveryState: row[deliveryState],
-                    deliveryZip: row[deliveryZip],
-                    distance: row[distance],
-                    cargoDescription: row[cargoDescription],
-                    rate: row[rate],
-                    fuelSurcharge: row[fuelSurcharge],
-                    totalAmount: row[totalAmount],
-                    notes: row[notes]
-                )
-                trip.id = UUID(uuidString: row[id]) ?? UUID()
-                trip.deliveryDate = row[deliveryDate].map { Date(timeIntervalSince1970: $0) }
-                trip.createdAt = Date(timeIntervalSince1970: row[createdAt])
-                trip.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
-                result.append(trip)
-            }
-        } catch {
-            print("Get trips failed: \(error)")
+        for row in try db.prepare(trips.order(pickupDate.desc)) {
+            var trip = Trip(
+                jobNumber: row[jobNumber],
+                customerId: UUID(uuidString: row[customerId]) ?? UUID(),
+                driverId: row[tripDriverId].flatMap { UUID(uuidString: $0) },
+                vehicleId: row[tripVehicleId].flatMap { UUID(uuidString: $0) },
+                status: TripStatus(rawValue: row[tripStatus]) ?? .pending,
+                pickupAddress: row[pickupAddress],
+                pickupCity: row[pickupCity],
+                pickupState: row[pickupState],
+                pickupZip: row[pickupZip],
+                pickupDate: Date(timeIntervalSince1970: row[pickupDate]),
+                deliveryAddress: row[deliveryAddress],
+                deliveryCity: row[deliveryCity],
+                deliveryState: row[deliveryState],
+                deliveryZip: row[deliveryZip],
+                distance: row[distance],
+                cargoDescription: row[cargoDescription],
+                cargoWeight: row[cargoWeight],
+                rate: row[rate],
+                fuelSurcharge: row[fuelSurcharge],
+                totalAmount: row[totalAmount],
+                notes: row[notes]
+            )
+            trip.id = UUID(uuidString: row[id]) ?? UUID()
+            trip.deliveryDate = row[deliveryDate].map { Date(timeIntervalSince1970: $0) }
+            trip.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            trip.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
+            result.append(trip)
         }
         return result
     }
 
-    func deleteTrip(_ trip: Trip) -> Bool {
-        guard let db = db else { return false }
-
-        do {
-            let tripRow = trips.filter(id == trip.id.uuidString)
+    func deleteTrip(_ trip: Trip) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let tid = trip.id.uuidString
+            let relatedUpdates = tripUpdates.filter(self.tripId == tid)
+            try db.run(relatedUpdates.delete())
+            let relatedInvoiceTrips = invoiceTrips.filter(invoiceTripTripId == tid)
+            try db.run(relatedInvoiceTrips.delete())
+            let tripRow = trips.filter(id == tid)
             try db.run(tripRow.delete())
-            return true
-        } catch {
-            print("Delete trip failed: \(error)")
-            return false
         }
     }
 
     // MARK: - Customer CRUD
-    func saveCustomer(_ customer: Customer) -> Bool {
-        guard let db = db else { return false }
 
-        do {
-            let insert = customers.insert(or: .replace,
-                id <- customer.id.uuidString,
-                companyName <- customer.companyName,
-                contactName <- customer.contactName,
-                email <- customer.email,
-                phone <- customer.phone,
-                customerType <- customer.type.rawValue,
-                address <- customer.address,
-                city <- customer.city,
-                state <- customer.state,
-                zip <- customer.zip,
-                creditLimit <- customer.creditLimit,
-                paymentTerms <- customer.paymentTerms,
-                taxId <- customer.taxId,
-                notes <- customer.notes,
-                createdAt <- customer.createdAt.timeIntervalSince1970,
-                updatedAt <- Date().timeIntervalSince1970
-            )
-            try db.run(insert)
-            return true
-        } catch {
-            print("Save customer failed: \(error)")
-            return false
+    func saveCustomer(_ customer: Customer) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let existing = try db.pluck(customers.filter(id == customer.id.uuidString))
+            if existing != nil {
+                let row = customers.filter(id == customer.id.uuidString)
+                try db.run(row.update(
+                    companyName <- customer.companyName,
+                    contactName <- customer.contactName,
+                    email <- customer.email,
+                    phone <- customer.phone,
+                    customerType <- customer.type.rawValue,
+                    address <- customer.address,
+                    city <- customer.city,
+                    state <- customer.state,
+                    zip <- customer.zip,
+                    creditLimit <- customer.creditLimit,
+                    paymentTerms <- customer.paymentTerms,
+                    taxId <- customer.taxId,
+                    notes <- customer.notes,
+                    updatedAt <- Date().timeIntervalSince1970
+                ))
+            } else {
+                try db.run(customers.insert(
+                    id <- customer.id.uuidString,
+                    companyName <- customer.companyName,
+                    contactName <- customer.contactName,
+                    email <- customer.email,
+                    phone <- customer.phone,
+                    customerType <- customer.type.rawValue,
+                    address <- customer.address,
+                    city <- customer.city,
+                    state <- customer.state,
+                    zip <- customer.zip,
+                    creditLimit <- customer.creditLimit,
+                    paymentTerms <- customer.paymentTerms,
+                    taxId <- customer.taxId,
+                    notes <- customer.notes,
+                    createdAt <- customer.createdAt.timeIntervalSince1970,
+                    updatedAt <- Date().timeIntervalSince1970
+                ))
+            }
         }
     }
 
-    func getAllCustomers() -> [Customer] {
-        guard let db = db else { return [] }
-
+    func getAllCustomers() throws -> [Customer] {
+        guard let db = db else { throw DatabaseError.notConnected }
         var result: [Customer] = []
-        do {
-            for row in try db.prepare(customers.order(companyName)) {
-                var customer = Customer(
-                    companyName: row[companyName],
-                    contactName: row[contactName],
-                    email: row[email],
-                    phone: row[phone],
-                    type: CustomerType(rawValue: row[customerType]) ?? .commercial,
-                    address: row[address] ?? "",
-                    city: row[city],
-                    state: row[state],
-                    zip: row[zip],
-                    creditLimit: row[creditLimit],
-                    paymentTerms: row[paymentTerms],
-                    taxId: row[taxId],
-                    notes: row[notes]
-                )
-                customer.id = UUID(uuidString: row[id]) ?? UUID()
-                customer.createdAt = Date(timeIntervalSince1970: row[createdAt])
-                customer.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
-                result.append(customer)
-            }
-        } catch {
-            print("Get customers failed: \(error)")
+        for row in try db.prepare(customers.order(companyName)) {
+            var customer = Customer(
+                companyName: row[companyName],
+                contactName: row[contactName],
+                email: row[email],
+                phone: row[phone],
+                type: CustomerType(rawValue: row[customerType]) ?? .commercial,
+                address: row[address] ?? "",
+                city: row[city],
+                state: row[state],
+                zip: row[zip],
+                creditLimit: row[creditLimit],
+                paymentTerms: row[paymentTerms],
+                taxId: row[taxId],
+                notes: row[notes]
+            )
+            customer.id = UUID(uuidString: row[id]) ?? UUID()
+            customer.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            customer.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
+            result.append(customer)
         }
         return result
     }
 
-    func deleteCustomer(_ customer: Customer) -> Bool {
-        guard let db = db else { return false }
-
-        do {
-            let customerRow = customers.filter(id == customer.id.uuidString)
+    func deleteCustomer(_ customer: Customer) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let cid = customer.id.uuidString
+            let relatedTrips = trips.filter(self.customerId == cid)
+            let tripIdsToDelete: [String] = try db.prepare(relatedTrips.select(id)).map { $0[id] }
+            let invoiceIds: [String] = try db.prepare(invoices.filter(self.customerId == cid).select(id)).map { $0[id] }
+            for invId in invoiceIds {
+                try db.run(invoiceTrips.filter(invoiceTripInvoiceId == invId).delete())
+            }
+            try db.run(invoices.filter(self.customerId == cid).delete())
+            for tid in tripIdsToDelete {
+                let relatedUpdates = tripUpdates.filter(self.tripId == tid)
+                try db.run(relatedUpdates.delete())
+            }
+            try db.run(relatedTrips.delete())
+            let customerRow = customers.filter(id == cid)
             try db.run(customerRow.delete())
-            return true
-        } catch {
-            print("Delete customer failed: \(error)")
-            return false
         }
     }
 
     // MARK: - Invoice CRUD
-    func saveInvoice(_ invoice: Invoice) -> Bool {
-        guard let db = db else { return false }
 
-        do {
-            let insert = invoices.insert(or: .replace,
-                id <- invoice.id.uuidString,
-                invoiceNumber <- invoice.invoiceNumber,
-                customerId <- invoice.customerId.uuidString,
-                tripIds <- invoice.tripIds.map { $0.uuidString }.joined(separator: ","),
-                invoiceDate <- invoice.invoiceDate.timeIntervalSince1970,
-                dueDate <- invoice.dueDate.timeIntervalSince1970,
-                subtotal <- invoice.subtotal,
-                tax <- invoice.tax,
-                total <- invoice.total,
-                invoiceStatus <- invoice.status.rawValue,
-                paidDate <- invoice.paidDate?.timeIntervalSince1970,
-                notes <- invoice.notes,
-                createdAt <- invoice.createdAt.timeIntervalSince1970,
-                updatedAt <- Date().timeIntervalSince1970
-            )
-            try db.run(insert)
-            return true
-        } catch {
-            print("Save invoice failed: \(error)")
-            return false
+    func saveInvoice(_ invoice: Invoice) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let existing = try db.pluck(invoices.filter(id == invoice.id.uuidString))
+            let tripIdStrings = invoice.tripIds.map { $0.uuidString }
+            if existing != nil {
+                let row = invoices.filter(id == invoice.id.uuidString)
+                try db.run(row.update(
+                    invoiceNumber <- invoice.invoiceNumber,
+                    customerId <- invoice.customerId.uuidString,
+                    tripIds <- tripIdStrings.joined(separator: ","),
+                    invoiceDate <- invoice.invoiceDate.timeIntervalSince1970,
+                    dueDate <- invoice.dueDate.timeIntervalSince1970,
+                    subtotal <- invoice.subtotal,
+                    tax <- invoice.tax,
+                    total <- invoice.total,
+                    invoiceStatus <- invoice.status.rawValue,
+                    paidDate <- invoice.paidDate?.timeIntervalSince1970,
+                    notes <- invoice.notes,
+                    updatedAt <- Date().timeIntervalSince1970
+                ))
+                let deleteJunction = invoiceTrips.filter(invoiceTripInvoiceId == invoice.id.uuidString)
+                try db.run(deleteJunction.delete())
+            } else {
+                try db.run(invoices.insert(
+                    id <- invoice.id.uuidString,
+                    invoiceNumber <- invoice.invoiceNumber,
+                    customerId <- invoice.customerId.uuidString,
+                    tripIds <- tripIdStrings.joined(separator: ","),
+                    invoiceDate <- invoice.invoiceDate.timeIntervalSince1970,
+                    dueDate <- invoice.dueDate.timeIntervalSince1970,
+                    subtotal <- invoice.subtotal,
+                    tax <- invoice.tax,
+                    total <- invoice.total,
+                    invoiceStatus <- invoice.status.rawValue,
+                    paidDate <- invoice.paidDate?.timeIntervalSince1970,
+                    notes <- invoice.notes,
+                    createdAt <- invoice.createdAt.timeIntervalSince1970,
+                    updatedAt <- Date().timeIntervalSince1970
+                ))
+            }
+            for tripIdStr in tripIdStrings {
+                try db.run(invoiceTrips.insert(
+                    invoiceTripInvoiceId <- invoice.id.uuidString,
+                    invoiceTripTripId <- tripIdStr
+                ))
+            }
         }
     }
 
-    func getAllInvoices() -> [Invoice] {
-        guard let db = db else { return [] }
-
+    func getAllInvoices() throws -> [Invoice] {
+        guard let db = db else { throw DatabaseError.notConnected }
         var result: [Invoice] = []
-        do {
-            for row in try db.prepare(invoices.order(invoiceDate.desc)) {
-                var invoice = Invoice(
-                    invoiceNumber: row[invoiceNumber],
-                    customerId: UUID(uuidString: row[customerId]) ?? UUID(),
-                    tripIds: row[tripIds].split(separator: ",").compactMap { UUID(uuidString: String($0)) },
-                    invoiceDate: Date(timeIntervalSince1970: row[invoiceDate]),
-                    dueDate: Date(timeIntervalSince1970: row[dueDate]),
-                    subtotal: row[subtotal],
-                    tax: row[tax],
-                    total: row[total],
-                    status: InvoiceStatus(rawValue: row[invoiceStatus]) ?? .draft,
-                    paidDate: row[paidDate].map { Date(timeIntervalSince1970: $0) },
-                    notes: row[notes]
-                )
-                invoice.id = UUID(uuidString: row[id]) ?? UUID()
-                invoice.createdAt = Date(timeIntervalSince1970: row[createdAt])
-                invoice.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
-                result.append(invoice)
+        for row in try db.prepare(invoices.order(invoiceDate.desc)) {
+            let invoiceIdStr = row[id]
+            var linkedTripIds: [UUID] = []
+            let junctionQuery = invoiceTrips.filter(invoiceTripInvoiceId == invoiceIdStr)
+            for junctionRow in try db.prepare(junctionQuery) {
+                if let tripUUID = UUID(uuidString: junctionRow[invoiceTripTripId]) {
+                    linkedTripIds.append(tripUUID)
+                }
             }
-        } catch {
-            print("Get invoices failed: \(error)")
+            if linkedTripIds.isEmpty {
+                linkedTripIds = row[tripIds].split(separator: ",").compactMap { UUID(uuidString: String($0)) }
+            }
+            var invoice = Invoice(
+                invoiceNumber: row[invoiceNumber],
+                customerId: UUID(uuidString: row[customerId]) ?? UUID(),
+                tripIds: linkedTripIds,
+                invoiceDate: Date(timeIntervalSince1970: row[invoiceDate]),
+                dueDate: Date(timeIntervalSince1970: row[dueDate]),
+                subtotal: row[subtotal],
+                tax: row[tax],
+                total: row[total],
+                status: InvoiceStatus(rawValue: row[invoiceStatus]) ?? .draft,
+                paidDate: row[paidDate].map { Date(timeIntervalSince1970: $0) },
+                notes: row[notes]
+            )
+            invoice.id = UUID(uuidString: invoiceIdStr) ?? UUID()
+            invoice.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            invoice.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
+            result.append(invoice)
         }
         return result
     }
 
-    func deleteInvoice(_ invoice: Invoice) -> Bool {
-        guard let db = db else { return false }
-
-        do {
-            let invoiceRow = invoices.filter(id == invoice.id.uuidString)
+    func deleteInvoice(_ invoice: Invoice) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let iid = invoice.id.uuidString
+            let relatedJunction = invoiceTrips.filter(invoiceTripInvoiceId == iid)
+            try db.run(relatedJunction.delete())
+            let invoiceRow = invoices.filter(id == iid)
             try db.run(invoiceRow.delete())
-            return true
-        } catch {
-            print("Delete invoice failed: \(error)")
-            return false
         }
     }
 
     // MARK: - Expense CRUD
-    func saveExpense(_ expense: Expense) -> Bool {
-        guard let db = db else { return false }
 
-        do {
-            let insert = expenses.insert(or: .replace,
-                id <- expense.id.uuidString,
-                category <- expense.category.rawValue,
-                expenseVendor <- expense.vendor,
-                description <- expense.description,
-                amount <- expense.amount,
-                date <- expense.date.timeIntervalSince1970,
-                expenseVehicleId <- expense.vehicleId?.uuidString,
-                expenseDriverId <- expense.driverId?.uuidString,
-                receiptNumber <- expense.receiptNumber,
-                notes <- expense.notes,
-                createdAt <- expense.createdAt.timeIntervalSince1970
-            )
-            try db.run(insert)
-            return true
-        } catch {
-            print("Save expense failed: \(error)")
-            return false
+    func saveExpense(_ expense: Expense) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let existing = try db.pluck(expenses.filter(id == expense.id.uuidString))
+            if existing != nil {
+                let row = expenses.filter(id == expense.id.uuidString)
+                try db.run(row.update(
+                    category <- expense.category.rawValue,
+                    expenseVendor <- expense.vendor,
+                    description <- expense.description,
+                    amount <- expense.amount,
+                    date <- expense.date.timeIntervalSince1970,
+                    expenseVehicleId <- expense.vehicleId?.uuidString,
+                    expenseDriverId <- expense.driverId?.uuidString,
+                    receiptNumber <- expense.receiptNumber,
+                    notes <- expense.notes
+                ))
+            } else {
+                try db.run(expenses.insert(
+                    id <- expense.id.uuidString,
+                    category <- expense.category.rawValue,
+                    expenseVendor <- expense.vendor,
+                    description <- expense.description,
+                    amount <- expense.amount,
+                    date <- expense.date.timeIntervalSince1970,
+                    expenseVehicleId <- expense.vehicleId?.uuidString,
+                    expenseDriverId <- expense.driverId?.uuidString,
+                    receiptNumber <- expense.receiptNumber,
+                    notes <- expense.notes,
+                    createdAt <- expense.createdAt.timeIntervalSince1970
+                ))
+            }
         }
     }
 
-    func getAllExpenses() -> [Expense] {
-        guard let db = db else { return [] }
-
+    func getAllExpenses() throws -> [Expense] {
+        guard let db = db else { throw DatabaseError.notConnected }
         var result: [Expense] = []
-        do {
-            for row in try db.prepare(expenses.order(date.desc)) {
-                var expense = Expense(
-                    category: ExpenseCategory(rawValue: row[category]) ?? .other,
-                    vendor: row[expenseVendor],
-                    description: row[description],
-                    amount: row[amount],
-                    date: Date(timeIntervalSince1970: row[date]),
-                    vehicleId: row[expenseVehicleId].flatMap { UUID(uuidString: $0) },
-                    driverId: row[expenseDriverId].flatMap { UUID(uuidString: $0) },
-                    receiptNumber: row[receiptNumber],
-                    notes: row[notes]
-                )
-                expense.id = UUID(uuidString: row[id]) ?? UUID()
-                expense.createdAt = Date(timeIntervalSince1970: row[createdAt])
-                result.append(expense)
-            }
-        } catch {
-            print("Get expenses failed: \(error)")
+        for row in try db.prepare(expenses.order(date.desc)) {
+            var expense = Expense(
+                category: ExpenseCategory(rawValue: row[category]) ?? .other,
+                vendor: row[expenseVendor],
+                description: row[description],
+                amount: row[amount],
+                date: Date(timeIntervalSince1970: row[date]),
+                vehicleId: row[expenseVehicleId].flatMap { UUID(uuidString: $0) },
+                driverId: row[expenseDriverId].flatMap { UUID(uuidString: $0) },
+                receiptNumber: row[receiptNumber],
+                notes: row[notes]
+            )
+            expense.id = UUID(uuidString: row[id]) ?? UUID()
+            expense.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            result.append(expense)
         }
         return result
     }
 
-    func deleteExpense(_ expense: Expense) -> Bool {
-        guard let db = db else { return false }
-
-        do {
-            let expenseRow = expenses.filter(id == expense.id.uuidString)
-            try db.run(expenseRow.delete())
-            return true
-        } catch {
-            print("Delete expense failed: \(error)")
-            return false
-        }
+    func deleteExpense(_ expense: Expense) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        let expenseRow = expenses.filter(id == expense.id.uuidString)
+        try db.run(expenseRow.delete())
     }
 
     // MARK: - Maintenance Record CRUD
-    func saveMaintenanceRecord(_ record: MaintenanceRecord) -> Bool {
-        guard let db = db else { return false }
-        do {
-            let insert = maintenanceRecords.insert(or: .replace,
-                id <- record.id.uuidString,
-                vehicleId <- record.vehicleId.uuidString,
-                maintenanceType <- record.type.rawValue,
-                description <- record.description,
-                date <- record.date.timeIntervalSince1970,
-                odometer <- record.odometer,
-                cost <- record.cost,
-                vendor <- record.vendor,
-                notes <- record.notes,
-                createdAt <- record.createdAt.timeIntervalSince1970
-            )
-            try db.run(insert)
-            return true
-        } catch {
-            print("Save maintenance record failed: \(error)")
-            return false
+
+    func saveMaintenanceRecord(_ record: MaintenanceRecord) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let existing = try db.pluck(maintenanceRecords.filter(id == record.id.uuidString))
+            if existing != nil {
+                let row = maintenanceRecords.filter(id == record.id.uuidString)
+                try db.run(row.update(
+                    vehicleId <- record.vehicleId.uuidString,
+                    maintenanceType <- record.type.rawValue,
+                    description <- record.description,
+                    date <- record.date.timeIntervalSince1970,
+                    odometer <- record.odometer,
+                    cost <- record.cost,
+                    vendor <- record.vendor,
+                    notes <- record.notes
+                ))
+            } else {
+                try db.run(maintenanceRecords.insert(
+                    id <- record.id.uuidString,
+                    vehicleId <- record.vehicleId.uuidString,
+                    maintenanceType <- record.type.rawValue,
+                    description <- record.description,
+                    date <- record.date.timeIntervalSince1970,
+                    odometer <- record.odometer,
+                    cost <- record.cost,
+                    vendor <- record.vendor,
+                    notes <- record.notes,
+                    createdAt <- record.createdAt.timeIntervalSince1970
+                ))
+            }
         }
     }
 
-    func getAllMaintenanceRecords(for vehicleId: UUID? = nil) -> [MaintenanceRecord] {
-        guard let db = db else { return [] }
+    func getAllMaintenanceRecords(for vehicleId: UUID? = nil) throws -> [MaintenanceRecord] {
+        guard let db = db else { throw DatabaseError.notConnected }
         var result: [MaintenanceRecord] = []
-        do {
-            var query = maintenanceRecords.order(date.desc)
-            if let vid = vehicleId {
-                query = query.filter(self.vehicleId == vid.uuidString)
-            }
-            for row in try db.prepare(query) {
-                var record = MaintenanceRecord(
-                    vehicleId: UUID(uuidString: row[self.vehicleId]) ?? UUID(),
-                    type: MaintenanceType(rawValue: row[maintenanceType]) ?? .other,
-                    description: row[description],
-                    date: Date(timeIntervalSince1970: row[date]),
-                    odometer: row[odometer],
-                    cost: row[cost],
-                    vendor: row[vendor],
-                    notes: row[notes]
-                )
-                record.id = UUID(uuidString: row[id]) ?? UUID()
-                record.createdAt = Date(timeIntervalSince1970: row[createdAt])
-                result.append(record)
-            }
-        } catch {
-            print("Get maintenance records failed: \(error)")
+        var query = maintenanceRecords.order(date.desc)
+        if let vid = vehicleId {
+            query = query.filter(self.vehicleId == vid.uuidString)
+        }
+        for row in try db.prepare(query) {
+            var record = MaintenanceRecord(
+                vehicleId: UUID(uuidString: row[self.vehicleId]) ?? UUID(),
+                type: MaintenanceType(rawValue: row[maintenanceType]) ?? .other,
+                description: row[description],
+                date: Date(timeIntervalSince1970: row[date]),
+                odometer: row[odometer],
+                cost: row[cost],
+                vendor: row[vendor],
+                notes: row[notes]
+            )
+            record.id = UUID(uuidString: row[id]) ?? UUID()
+            record.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            result.append(record)
         }
         return result
     }
 
-    func deleteMaintenanceRecord(_ record: MaintenanceRecord) -> Bool {
-        guard let db = db else { return false }
-        do {
-            let row = maintenanceRecords.filter(id == record.id.uuidString)
-            try db.run(row.delete())
-            return true
-        } catch {
-            print("Delete maintenance record failed: \(error)")
-            return false
-        }
+    func deleteMaintenanceRecord(_ record: MaintenanceRecord) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        let row = maintenanceRecords.filter(id == record.id.uuidString)
+        try db.run(row.delete())
     }
 
     // MARK: - Fuel Log CRUD
-    func saveFuelLog(_ log: FuelLog) -> Bool {
-        guard let db = db else { return false }
-        do {
-            let insert = fuelLogs.insert(or: .replace,
-                id <- log.id.uuidString,
-                vehicleId <- log.vehicleId.uuidString,
-                date <- log.date.timeIntervalSince1970,
-                odometer <- log.odometer,
-                quantity <- log.quantity,
-                pricePerUnit <- log.pricePerUnit,
-                totalCost <- log.totalCost,
-                fuelType <- log.fuelType.rawValue,
-                location <- log.location,
-                notes <- log.notes,
-                createdAt <- log.createdAt.timeIntervalSince1970
-            )
-            try db.run(insert)
-            return true
-        } catch {
-            print("Save fuel log failed: \(error)")
-            return false
+
+    func saveFuelLog(_ log: FuelLog) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let existing = try db.pluck(fuelLogs.filter(id == log.id.uuidString))
+            if existing != nil {
+                let row = fuelLogs.filter(id == log.id.uuidString)
+                try db.run(row.update(
+                    vehicleId <- log.vehicleId.uuidString,
+                    date <- log.date.timeIntervalSince1970,
+                    odometer <- log.odometer,
+                    quantity <- log.quantity,
+                    pricePerUnit <- log.pricePerUnit,
+                    totalCost <- log.totalCost,
+                    fuelType <- log.fuelType.rawValue,
+                    location <- log.location,
+                    notes <- log.notes
+                ))
+            } else {
+                try db.run(fuelLogs.insert(
+                    id <- log.id.uuidString,
+                    vehicleId <- log.vehicleId.uuidString,
+                    date <- log.date.timeIntervalSince1970,
+                    odometer <- log.odometer,
+                    quantity <- log.quantity,
+                    pricePerUnit <- log.pricePerUnit,
+                    totalCost <- log.totalCost,
+                    fuelType <- log.fuelType.rawValue,
+                    location <- log.location,
+                    notes <- log.notes,
+                    createdAt <- log.createdAt.timeIntervalSince1970
+                ))
+            }
         }
     }
 
-    func getAllFuelLogs(for vehicleId: UUID? = nil) -> [FuelLog] {
-        guard let db = db else { return [] }
+    func getAllFuelLogs(for vehicleId: UUID? = nil) throws -> [FuelLog] {
+        guard let db = db else { throw DatabaseError.notConnected }
         var result: [FuelLog] = []
-        do {
-            var query = fuelLogs.order(date.desc)
-            if let vid = vehicleId {
-                query = query.filter(self.vehicleId == vid.uuidString)
-            }
-            for row in try db.prepare(query) {
-                var log = FuelLog(
-                    vehicleId: UUID(uuidString: row[self.vehicleId]) ?? UUID(),
-                    date: Date(timeIntervalSince1970: row[date]),
-                    odometer: row[odometer],
-                    quantity: row[quantity],
-                    pricePerUnit: row[pricePerUnit],
-                    totalCost: row[totalCost],
-                    fuelType: FuelType(rawValue: row[fuelType]) ?? .diesel,
-                    location: row[location],
-                    notes: row[notes]
-                )
-                log.id = UUID(uuidString: row[id]) ?? UUID()
-                log.createdAt = Date(timeIntervalSince1970: row[createdAt])
-                result.append(log)
-            }
-        } catch {
-            print("Get fuel logs failed: \(error)")
+        var query = fuelLogs.order(date.desc)
+        if let vid = vehicleId {
+            query = query.filter(self.vehicleId == vid.uuidString)
+        }
+        for row in try db.prepare(query) {
+            var log = FuelLog(
+                vehicleId: UUID(uuidString: row[self.vehicleId]) ?? UUID(),
+                date: Date(timeIntervalSince1970: row[date]),
+                odometer: row[odometer],
+                quantity: row[quantity],
+                pricePerUnit: row[pricePerUnit],
+                totalCost: row[totalCost],
+                fuelType: FuelType(rawValue: row[fuelType]) ?? .diesel,
+                location: row[location],
+                notes: row[notes]
+            )
+            log.id = UUID(uuidString: row[id]) ?? UUID()
+            log.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            result.append(log)
         }
         return result
     }
 
-    func deleteFuelLog(_ log: FuelLog) -> Bool {
-        guard let db = db else { return false }
-        do {
-            let row = fuelLogs.filter(id == log.id.uuidString)
-            try db.run(row.delete())
-            return true
-        } catch {
-            print("Delete fuel log failed: \(error)")
-            return false
-        }
+    func deleteFuelLog(_ log: FuelLog) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        let row = fuelLogs.filter(id == log.id.uuidString)
+        try db.run(row.delete())
     }
 
     // MARK: - Certification CRUD
-    func saveCertification(_ cert: Certification) -> Bool {
-        guard let db = db else { return false }
-        do {
-            let insert = certifications.insert(or: .replace,
-                id <- cert.id.uuidString,
-                driverId <- cert.driverId.uuidString,
-                certificationType <- cert.type.rawValue,
-                name <- cert.name,
-                issuedDate <- cert.issuedDate.timeIntervalSince1970,
-                expiryDate <- cert.expiryDate?.timeIntervalSince1970,
-                documentNumber <- cert.documentNumber,
-                createdAt <- cert.createdAt.timeIntervalSince1970
-            )
-            try db.run(insert)
-            return true
-        } catch {
-            print("Save certification failed: \(error)")
-            return false
+
+    func saveCertification(_ cert: Certification) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        try transaction {
+            let existing = try db.pluck(certifications.filter(id == cert.id.uuidString))
+            if existing != nil {
+                let row = certifications.filter(id == cert.id.uuidString)
+                try db.run(row.update(
+                    driverId <- cert.driverId.uuidString,
+                    certificationType <- cert.type.rawValue,
+                    name <- cert.name,
+                    issuedDate <- cert.issuedDate.timeIntervalSince1970,
+                    expiryDate <- cert.expiryDate?.timeIntervalSince1970,
+                    documentNumber <- cert.documentNumber
+                ))
+            } else {
+                try db.run(certifications.insert(
+                    id <- cert.id.uuidString,
+                    driverId <- cert.driverId.uuidString,
+                    certificationType <- cert.type.rawValue,
+                    name <- cert.name,
+                    issuedDate <- cert.issuedDate.timeIntervalSince1970,
+                    expiryDate <- cert.expiryDate?.timeIntervalSince1970,
+                    documentNumber <- cert.documentNumber,
+                    createdAt <- cert.createdAt.timeIntervalSince1970
+                ))
+            }
         }
     }
 
-    func getAllCertifications(for driverId: UUID? = nil) -> [Certification] {
-        guard let db = db else { return [] }
+    func getAllCertifications(for driverId: UUID? = nil) throws -> [Certification] {
+        guard let db = db else { throw DatabaseError.notConnected }
         var result: [Certification] = []
-        do {
-            var query = certifications.order(issuedDate.desc)
-            if let did = driverId {
-                query = query.filter(self.driverId == did.uuidString)
-            }
-            for row in try db.prepare(query) {
-                var cert = Certification(
-                    driverId: UUID(uuidString: row[self.driverId]) ?? UUID(),
-                    type: CertificationType(rawValue: row[certificationType]) ?? .other,
-                    name: row[name],
-                    issuedDate: Date(timeIntervalSince1970: row[issuedDate]),
-                    expiryDate: row[expiryDate].map { Date(timeIntervalSince1970: $0) },
-                    documentNumber: row[documentNumber]
-                )
-                cert.id = UUID(uuidString: row[id]) ?? UUID()
-                cert.createdAt = Date(timeIntervalSince1970: row[createdAt])
-                result.append(cert)
-            }
-        } catch {
-            print("Get certifications failed: \(error)")
+        var query = certifications.order(issuedDate.desc)
+        if let did = driverId {
+            query = query.filter(self.driverId == did.uuidString)
+        }
+        for row in try db.prepare(query) {
+            var cert = Certification(
+                driverId: UUID(uuidString: row[self.driverId]) ?? UUID(),
+                type: CertificationType(rawValue: row[certificationType]) ?? .other,
+                name: row[name],
+                issuedDate: Date(timeIntervalSince1970: row[issuedDate]),
+                expiryDate: row[expiryDate].map { Date(timeIntervalSince1970: $0) },
+                documentNumber: row[documentNumber]
+            )
+            cert.id = UUID(uuidString: row[id]) ?? UUID()
+            cert.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            result.append(cert)
         }
         return result
     }
 
-    func deleteCertification(_ cert: Certification) -> Bool {
-        guard let db = db else { return false }
-        do {
-            let row = certifications.filter(id == cert.id.uuidString)
-            try db.run(row.delete())
-            return true
-        } catch {
-            print("Delete certification failed: \(error)")
-            return false
-        }
+    func deleteCertification(_ cert: Certification) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        let row = certifications.filter(id == cert.id.uuidString)
+        try db.run(row.delete())
     }
 
     // MARK: - Settings
-    func saveSettings(_ settings: BusinessSettings) -> Bool {
-        guard let db = db else { return false }
-        do {
-            if let data = try? JSONEncoder().encode(settings),
-               let json = String(data: data, encoding: .utf8) {
-                let insert = self.settings.insert(or: .replace,
-                    self.settingsKey <- "business_settings",
-                    self.settingsValue <- json
-                )
-                try db.run(insert)
-                return true
-            }
-            return false
-        } catch {
-            print("Save settings failed: \(error)")
-            return false
+
+    func saveSettings(_ settings: BusinessSettings) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let data = try? JSONEncoder().encode(settings),
+              let json = String(data: data, encoding: .utf8) else {
+            throw DatabaseError.saveFailed("Failed to encode settings")
+        }
+        let existing = try db.pluck(self.settings.filter(settingsKey == "business_settings"))
+        if existing != nil {
+            let row = self.settings.filter(settingsKey == "business_settings")
+            try db.run(row.update(settingsValue <- json))
+        } else {
+            try db.run(self.settings.insert(
+                settingsKey <- "business_settings",
+                settingsValue <- json
+            ))
         }
     }
 
@@ -1042,106 +1201,835 @@ class DatabaseManager {
         return .default
     }
 
-    // MARK: - Dashboard Stats
-    func getDashboardStats() -> DashboardStats {
-        let allVehicles = getAllVehicles()
-        let allDrivers = getAllDrivers()
-        let allTrips = getAllTrips()
-        let allCustomers = getAllCustomers()
-        let allExpenses = getAllExpenses()
+    // MARK: - Dashboard Stats (SQL Aggregates)
 
-        let activeVehicles = allVehicles.filter { $0.status != .retired }
-        let activeDrivers = allDrivers.filter { $0.status == .active }
+    func getDashboardStats() throws -> DashboardStats {
+        guard let db = db else {
+            return DashboardStats(
+                totalVehicles: 0, activeVehicles: 0, totalDrivers: 0, activeDrivers: 0,
+                todayTrips: 0, pendingTrips: 0, monthlyRevenue: 0, monthlyExpenses: 0,
+                fleetUtilization: 0, overdueMaintenance: 0, expiringLicenses: 0, activeCustomers: 0
+            )
+        }
+
+        let totalVehicles = try db.scalar(vehicles.count) ?? 0
+        let activeVehicles = try db.scalar(vehicles.filter(status != "Retired").count) ?? 0
+        let inUseVehicles = try db.scalar(vehicles.filter(status == "In Use").count) ?? 0
+        let maintenanceVehicles = try db.scalar(vehicles.filter(status == "Maintenance").count) ?? 0
+
+        let totalDrivers = try db.scalar(drivers.count) ?? 0
+        let activeDrivers = try db.scalar(drivers.filter(status == "Active").count) ?? 0
+
+        let totalCustomers = try db.scalar(customers.count) ?? 0
 
         let calendar = Calendar.current
         let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: Date()))!
-
-        let monthlyTrips = allTrips.filter { $0.pickupDate >= startOfMonth && $0.status == .completed }
-        let monthlyRevenue = monthlyTrips.reduce(0) { $0 + $1.totalAmount }
-
-        let monthlyExpenses = allExpenses.filter { $0.date >= startOfMonth }.reduce(0) { $0 + $1.amount }
+        let startOfMonthTimestamp = startOfMonth.timeIntervalSince1970
 
         let today = calendar.startOfDay(for: Date())
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: today)!
-        let todayTrips = allTrips.filter { $0.pickupDate >= today && $0.pickupDate < tomorrow }
-        let pendingTrips = allTrips.filter { $0.status == .pending }
+        let todayTimestamp = today.timeIntervalSince1970
+        let tomorrowTimestamp = tomorrow.timeIntervalSince1970
 
-        let inUseVehicles = allVehicles.filter { $0.status == .inUse }.count
-        let fleetUtilization = activeVehicles.isEmpty ? 0 : Double(inUseVehicles) / Double(activeVehicles.count) * 100
+        let todayTrips = try db.scalar(trips.filter(pickupDate >= todayTimestamp && pickupDate < tomorrowTimestamp).count) ?? 0
+        let pendingTrips = try db.scalar(trips.filter(tripStatus == "Pending").count) ?? 0
 
-        let thirtyDaysFromNow = Date().addingTimeInterval(30*24*60*60)
-        let expiringLicenses = allDrivers.filter { $0.licenseExpiry <= thirtyDaysFromNow && $0.status == .active }.count
+        let monthlyRevenue = try db.scalar(
+            trips.filter(pickupDate >= startOfMonthTimestamp && tripStatus == "Completed").select(totalAmount.sum)
+        ) as? Double ?? 0
 
-        let vehiclesInMaintenance = allVehicles.filter { $0.status == .maintenance }.count
+        let monthlyExpenses = try db.scalar(
+            expenses.filter(date >= startOfMonthTimestamp).select(amount.sum)
+        ) as? Double ?? 0
+
+        let fleetUtilization = activeVehicles > 0 ? Double(inUseVehicles) / Double(activeVehicles) * 100 : 0
+
+        let thirtyDaysFromNow = Date().addingTimeInterval(30 * 24 * 60 * 60)
+        let thirtyDaysTimestamp = thirtyDaysFromNow.timeIntervalSince1970
+        let nowTimestamp = Date().timeIntervalSince1970
+        let expiringLicenses = try db.scalar(
+            drivers.filter(licenseExpiry > nowTimestamp && licenseExpiry <= thirtyDaysTimestamp && status == "Active").count
+        ) ?? 0
 
         return DashboardStats(
-            totalVehicles: allVehicles.count,
-            activeVehicles: activeVehicles.count,
-            totalDrivers: allDrivers.count,
-            activeDrivers: activeDrivers.count,
-            todayTrips: todayTrips.count,
-            pendingTrips: pendingTrips.count,
+            totalVehicles: totalVehicles,
+            activeVehicles: activeVehicles,
+            totalDrivers: totalDrivers,
+            activeDrivers: activeDrivers,
+            todayTrips: todayTrips,
+            pendingTrips: pendingTrips,
             monthlyRevenue: monthlyRevenue,
             monthlyExpenses: monthlyExpenses,
             fleetUtilization: fleetUtilization,
-            overdueMaintenance: vehiclesInMaintenance,
+            overdueMaintenance: maintenanceVehicles,
             expiringLicenses: expiringLicenses,
-            activeCustomers: allCustomers.count
+            activeCustomers: totalCustomers
         )
     }
 
     // MARK: - Reports Data
-    func getRevenueByMonth(months: Int = 12) -> [(Date, Double)] {
-        let allTrips = getAllTrips().filter { $0.status == .completed || $0.status == .delivered }
+
+    func getRevenueByMonth(months: Int = 12) throws -> [(Date, Double)] {
+        guard let db = db else { return [] }
         let calendar = Calendar.current
         let now = Date()
-
         var result: [(Date, Double)] = []
+
         for i in 0..<months {
             let monthDate = calendar.date(byAdding: .month, value: -i, to: now)!
             let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: monthDate))!
             guard let endOfMonth = calendar.date(byAdding: .month, value: 1, to: startOfMonth) else { continue }
 
-            let monthRevenue = allTrips
-                .filter { $0.pickupDate >= startOfMonth && $0.pickupDate < endOfMonth }
-                .reduce(0) { $0 + $1.totalAmount }
+            let startTs = startOfMonth.timeIntervalSince1970
+            let endTs = endOfMonth.timeIntervalSince1970
+
+            let monthRevenue = try db.scalar(
+                trips.filter(pickupDate >= startTs && pickupDate < endTs && (tripStatus == "Completed" || tripStatus == "Delivered"))
+                    .select(totalAmount.sum)
+            ) as? Double ?? 0
 
             result.append((startOfMonth, monthRevenue))
         }
-
         return result.reversed()
     }
 
-    func getExpensesByCategory() -> [(ExpenseCategory, Double)] {
-        let allExpenses = getAllExpenses()
-        var result: [ExpenseCategory: Double] = [:]
-
-        for expense in allExpenses {
-            result[expense.category, default: 0] += expense.amount
+    func getExpensesByCategory() throws -> [(ExpenseCategory, Double)] {
+        guard let db = db else { return [] }
+        var result: [(ExpenseCategory, Double)] = []
+        let categoryColumn = SQLExpression<String>("category")
+        for row in try db.prepare(expenses.group(categoryColumn)) {
+            let cat = ExpenseCategory(rawValue: row[categoryColumn]) ?? .other
+            let sum = try db.scalar(expenses.filter(categoryColumn == row[categoryColumn]).select(amount.sum)) as? Double ?? 0
+            result.append((cat, sum))
         }
-
-        return result.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
+        return result.sorted { $0.1 > $1.1 }
     }
 
-    func getFleetUtilization(includeRetired: Bool = false) -> [(VehicleStatus, Int)] {
-        let allVehicles = includeRetired ? getAllVehicles() : getAllVehicles().filter { $0.status != .retired }
-        var result: [VehicleStatus: Int] = [:]
-
-        for vehicle in allVehicles {
-            result[vehicle.status, default: 0] += 1
+    func getFleetUtilization(includeRetired: Bool = false) throws -> [(VehicleStatus, Int)] {
+        guard let db = db else { return [] }
+        var result: [(VehicleStatus, Int)] = []
+        let statusColumn = SQLExpression<String>("status")
+        var query = vehicles.group(statusColumn)
+        if !includeRetired {
+            query = vehicles.filter(status != "Retired").group(statusColumn)
         }
-
-        return result.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
+        for row in try db.prepare(query) {
+            let st = VehicleStatus(rawValue: row[statusColumn]) ?? .available
+            let count = try db.scalar(vehicles.filter(statusColumn == row[statusColumn]).count) ?? 0
+            result.append((st, count))
+        }
+        return result.sorted { $0.1 > $1.1 }
     }
 
-    func getTripsByStatus() -> [(TripStatus, Int)] {
-        let allTrips = getAllTrips()
-        var result: [TripStatus: Int] = [:]
+    func getTripsByStatus() throws -> [(TripStatus, Int)] {
+        guard let db = db else { return [] }
+        var result: [(TripStatus, Int)] = []
+        let statusColumn = SQLExpression<String>("status")
+        for row in try db.prepare(trips.group(statusColumn)) {
+            let st = TripStatus(rawValue: row[statusColumn]) ?? .pending
+            let count = try db.scalar(trips.filter(statusColumn == row[statusColumn]).count) ?? 0
+            result.append((st, count))
+        }
+        return result.sorted { $0.1 > $1.1 }
+    }
 
-        for trip in allTrips {
-            result[trip.status, default: 0] += 1
+    // MARK: - Import / Export
+
+    func exportAllData() throws -> Data {
+        guard let db = db else { throw DatabaseError.notConnected }
+
+        var exportVehicles: [Vehicle] = []
+        for row in try db.prepare(vehicles.order(createdAt.desc)) {
+            var vehicle = Vehicle(
+                name: row[name],
+                type: VehicleType(rawValue: row[type]) ?? .truck,
+                licensePlate: row[licensePlate],
+                make: row[make],
+                model: row[model],
+                year: row[year],
+                vin: row[vin],
+                status: VehicleStatus(rawValue: row[status]) ?? .available,
+                currentOdometer: row[currentOdometer],
+                fuelType: FuelType(rawValue: row[fuelType]) ?? .diesel,
+                notes: row[notes]
+            )
+            vehicle.id = UUID(uuidString: row[id]) ?? UUID()
+            if let pd = row[purchaseDate] {
+                vehicle.purchaseDate = Date(timeIntervalSince1970: pd)
+            }
+            vehicle.purchasePrice = row[purchasePrice]
+            vehicle.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            vehicle.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
+            exportVehicles.append(vehicle)
         }
 
-        return result.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
+        var exportDrivers: [Driver] = []
+        for row in try db.prepare(drivers.order(createdAt.desc)) {
+            var driver = Driver(
+                firstName: row[firstName],
+                lastName: row[lastName],
+                email: row[email],
+                phone: row[phone],
+                address: row[address],
+                emergencyContact: row[emergencyContact],
+                emergencyPhone: row[emergencyPhone],
+                licenseNumber: row[licenseNumber],
+                licenseState: row[licenseState],
+                licenseExpiry: Date(timeIntervalSince1970: row[licenseExpiry]),
+                status: DriverStatus(rawValue: row[status]) ?? .active,
+                hireDate: Date(timeIntervalSince1970: row[hireDate]),
+                terminationDate: row[terminationDate].map { Date(timeIntervalSince1970: $0) },
+                notes: row[notes],
+                rating: row[rating]
+            )
+            driver.id = UUID(uuidString: row[id]) ?? UUID()
+            driver.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            driver.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
+            exportDrivers.append(driver)
+        }
+
+        var exportTrips: [Trip] = []
+        for row in try db.prepare(trips.order(pickupDate.desc)) {
+            var trip = Trip(
+                jobNumber: row[jobNumber],
+                customerId: UUID(uuidString: row[customerId]) ?? UUID(),
+                driverId: row[tripDriverId].flatMap { UUID(uuidString: $0) },
+                vehicleId: row[tripVehicleId].flatMap { UUID(uuidString: $0) },
+                status: TripStatus(rawValue: row[tripStatus]) ?? .pending,
+                pickupAddress: row[pickupAddress],
+                pickupCity: row[pickupCity],
+                pickupState: row[pickupState],
+                pickupZip: row[pickupZip],
+                pickupDate: Date(timeIntervalSince1970: row[pickupDate]),
+                deliveryAddress: row[deliveryAddress],
+                deliveryCity: row[deliveryCity],
+                deliveryState: row[deliveryState],
+                deliveryZip: row[deliveryZip],
+                distance: row[distance],
+                cargoDescription: row[cargoDescription],
+                cargoWeight: row[cargoWeight],
+                rate: row[rate],
+                fuelSurcharge: row[fuelSurcharge],
+                totalAmount: row[totalAmount],
+                notes: row[notes]
+            )
+            trip.id = UUID(uuidString: row[id]) ?? UUID()
+            trip.deliveryDate = row[deliveryDate].map { Date(timeIntervalSince1970: $0) }
+            trip.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            trip.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
+            exportTrips.append(trip)
+        }
+
+        var exportCustomers: [Customer] = []
+        for row in try db.prepare(customers.order(companyName)) {
+            var customer = Customer(
+                companyName: row[companyName],
+                contactName: row[contactName],
+                email: row[email],
+                phone: row[phone],
+                type: CustomerType(rawValue: row[customerType]) ?? .commercial,
+                address: row[address] ?? "",
+                city: row[city],
+                state: row[state],
+                zip: row[zip],
+                creditLimit: row[creditLimit],
+                paymentTerms: row[paymentTerms],
+                taxId: row[taxId],
+                notes: row[notes]
+            )
+            customer.id = UUID(uuidString: row[id]) ?? UUID()
+            customer.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            customer.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
+            exportCustomers.append(customer)
+        }
+
+        var exportInvoices: [Invoice] = []
+        for row in try db.prepare(invoices.order(invoiceDate.desc)) {
+            let invoiceIdStr = row[id]
+            var linkedTripIds: [UUID] = []
+            let junctionQuery = invoiceTrips.filter(invoiceTripInvoiceId == invoiceIdStr)
+            for junctionRow in try db.prepare(junctionQuery) {
+                if let tripUUID = UUID(uuidString: junctionRow[invoiceTripTripId]) {
+                    linkedTripIds.append(tripUUID)
+                }
+            }
+            if linkedTripIds.isEmpty {
+                linkedTripIds = row[tripIds].split(separator: ",").compactMap { UUID(uuidString: String($0)) }
+            }
+            var invoice = Invoice(
+                invoiceNumber: row[invoiceNumber],
+                customerId: UUID(uuidString: row[customerId]) ?? UUID(),
+                tripIds: linkedTripIds,
+                invoiceDate: Date(timeIntervalSince1970: row[invoiceDate]),
+                dueDate: Date(timeIntervalSince1970: row[dueDate]),
+                subtotal: row[subtotal],
+                tax: row[tax],
+                total: row[total],
+                status: InvoiceStatus(rawValue: row[invoiceStatus]) ?? .draft,
+                paidDate: row[paidDate].map { Date(timeIntervalSince1970: $0) },
+                notes: row[notes]
+            )
+            invoice.id = UUID(uuidString: invoiceIdStr) ?? UUID()
+            invoice.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            invoice.updatedAt = Date(timeIntervalSince1970: row[updatedAt])
+            exportInvoices.append(invoice)
+        }
+
+        var exportExpenses: [Expense] = []
+        for row in try db.prepare(expenses.order(date.desc)) {
+            var expense = Expense(
+                category: ExpenseCategory(rawValue: row[category]) ?? .other,
+                vendor: row[expenseVendor],
+                description: row[description],
+                amount: row[amount],
+                date: Date(timeIntervalSince1970: row[date]),
+                vehicleId: row[expenseVehicleId].flatMap { UUID(uuidString: $0) },
+                driverId: row[expenseDriverId].flatMap { UUID(uuidString: $0) },
+                receiptNumber: row[receiptNumber],
+                notes: row[notes]
+            )
+            expense.id = UUID(uuidString: row[id]) ?? UUID()
+            expense.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            exportExpenses.append(expense)
+        }
+
+        var exportMaintenanceRecords: [MaintenanceRecord] = []
+        for row in try db.prepare(maintenanceRecords.order(date.desc)) {
+            var record = MaintenanceRecord(
+                vehicleId: UUID(uuidString: row[self.vehicleId]) ?? UUID(),
+                type: MaintenanceType(rawValue: row[maintenanceType]) ?? .other,
+                description: row[description],
+                date: Date(timeIntervalSince1970: row[date]),
+                odometer: row[odometer],
+                cost: row[cost],
+                vendor: row[vendor],
+                notes: row[notes]
+            )
+            record.id = UUID(uuidString: row[id]) ?? UUID()
+            record.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            exportMaintenanceRecords.append(record)
+        }
+
+        var exportFuelLogs: [FuelLog] = []
+        for row in try db.prepare(fuelLogs.order(date.desc)) {
+            var log = FuelLog(
+                vehicleId: UUID(uuidString: row[self.vehicleId]) ?? UUID(),
+                date: Date(timeIntervalSince1970: row[date]),
+                odometer: row[odometer],
+                quantity: row[quantity],
+                pricePerUnit: row[pricePerUnit],
+                totalCost: row[totalCost],
+                fuelType: FuelType(rawValue: row[fuelType]) ?? .diesel,
+                location: row[location],
+                notes: row[notes]
+            )
+            log.id = UUID(uuidString: row[id]) ?? UUID()
+            log.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            exportFuelLogs.append(log)
+        }
+
+        var exportCertifications: [Certification] = []
+        for row in try db.prepare(certifications.order(issuedDate.desc)) {
+            var cert = Certification(
+                driverId: UUID(uuidString: row[self.driverId]) ?? UUID(),
+                type: CertificationType(rawValue: row[certificationType]) ?? .other,
+                name: row[name],
+                issuedDate: Date(timeIntervalSince1970: row[issuedDate]),
+                expiryDate: row[expiryDate].map { Date(timeIntervalSince1970: $0) },
+                documentNumber: row[documentNumber]
+            )
+            cert.id = UUID(uuidString: row[id]) ?? UUID()
+            cert.createdAt = Date(timeIntervalSince1970: row[createdAt])
+            exportCertifications.append(cert)
+        }
+
+        let settingsData = loadSettings()
+
+        let payload: [String: Any] = [
+            "vehicles": exportVehicles.map { vehicleToDict($0) },
+            "drivers": exportDrivers.map { driverToDict($0) },
+            "trips": exportTrips.map { tripToDict($0) },
+            "customers": exportCustomers.map { customerToDict($0) },
+            "invoices": exportInvoices.map { invoiceToDict($0) },
+            "expenses": exportExpenses.map { expenseToDict($0) },
+            "maintenanceRecords": exportMaintenanceRecords.map { maintenanceRecordToDict($0) },
+            "fuelLogs": exportFuelLogs.map { fuelLogToDict($0) },
+            "certifications": exportCertifications.map { certificationToDict($0) },
+            "settings": settingsData
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        return data
+    }
+
+    func importAllData(from data: Data) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw DatabaseError.saveFailed("Invalid JSON format")
+        }
+
+        try transaction {
+            try db.run(vehicles.delete())
+            try db.run(drivers.delete())
+            try db.run(trips.delete())
+            try db.run(customers.delete())
+            try db.run(invoices.delete())
+            try db.run(invoiceTrips.delete())
+            try db.run(expenses.delete())
+            try db.run(maintenanceRecords.delete())
+            try db.run(fuelLogs.delete())
+            try db.run(certifications.delete())
+            try db.run(settings.delete())
+
+            if let vehiclesArray = json["vehicles"] as? [[String: Any]] {
+                for dict in vehiclesArray {
+                    try importVehicle(from: dict)
+                }
+            }
+
+            if let driversArray = json["drivers"] as? [[String: Any]] {
+                for dict in driversArray {
+                    try importDriver(from: dict)
+                }
+            }
+
+            if let tripsArray = json["trips"] as? [[String: Any]] {
+                for dict in tripsArray {
+                    try importTrip(from: dict)
+                }
+            }
+
+            if let customersArray = json["customers"] as? [[String: Any]] {
+                for dict in customersArray {
+                    try importCustomer(from: dict)
+                }
+            }
+
+            if let invoicesArray = json["invoices"] as? [[String: Any]] {
+                for dict in invoicesArray {
+                    try importInvoice(from: dict)
+                }
+            }
+
+            if let expensesArray = json["expenses"] as? [[String: Any]] {
+                for dict in expensesArray {
+                    try importExpense(from: dict)
+                }
+            }
+
+            if let maintenanceArray = json["maintenanceRecords"] as? [[String: Any]] {
+                for dict in maintenanceArray {
+                    try importMaintenanceRecord(from: dict)
+                }
+            }
+
+            if let fuelLogsArray = json["fuelLogs"] as? [[String: Any]] {
+                for dict in fuelLogsArray {
+                    try importFuelLog(from: dict)
+                }
+            }
+
+            if let certificationsArray = json["certifications"] as? [[String: Any]] {
+                for dict in certificationsArray {
+                    try importCertification(from: dict)
+                }
+            }
+
+            if let settingsDict = json["settings"] as? [String: Any],
+               let settingsData = try? JSONSerialization.data(withJSONObject: settingsDict),
+               let settingsStr = String(data: settingsData, encoding: .utf8) {
+                try db.run(self.settings.insert(
+                    settingsKey <- "business_settings",
+                    settingsValue <- settingsStr
+                ))
+            }
+        }
+    }
+
+    // MARK: - Import Helpers
+
+    private func importVehicle(from dict: [String: Any]) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let vid = dict["id"] as? String else { return }
+        try db.run(vehicles.insert(
+            id <- vid,
+            name <- dict["name"] as? String ?? "",
+            type <- dict["type"] as? String ?? "",
+            licensePlate <- dict["licensePlate"] as? String ?? "",
+            make <- dict["make"] as? String ?? "",
+            model <- dict["model"] as? String ?? "",
+            year <- dict["year"] as? Int ?? 0,
+            vin <- dict["vin"] as? String ?? "",
+            status <- dict["status"] as? String ?? "",
+            purchaseDate <- dict["purchaseDate"] as? Double,
+            purchasePrice <- dict["purchasePrice"] as? Double,
+            currentOdometer <- dict["currentOdometer"] as? Int ?? 0,
+            fuelType <- dict["fuelType"] as? String ?? "",
+            notes <- dict["notes"] as? String,
+            createdAt <- dict["createdAt"] as? Double ?? Date().timeIntervalSince1970,
+            updatedAt <- dict["updatedAt"] as? Double ?? Date().timeIntervalSince1970
+        ))
+    }
+
+    private func importDriver(from dict: [String: Any]) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let did = dict["id"] as? String else { return }
+        try db.run(drivers.insert(
+            id <- did,
+            firstName <- dict["firstName"] as? String ?? "",
+            lastName <- dict["lastName"] as? String ?? "",
+            email <- dict["email"] as? String ?? "",
+            phone <- dict["phone"] as? String ?? "",
+            address <- dict["address"] as? String,
+            emergencyContact <- dict["emergencyContact"] as? String,
+            emergencyPhone <- dict["emergencyPhone"] as? String,
+            licenseNumber <- dict["licenseNumber"] as? String ?? "",
+            licenseState <- dict["licenseState"] as? String ?? "",
+            licenseExpiry <- dict["licenseExpiry"] as? Double ?? Date().timeIntervalSince1970,
+            status <- dict["status"] as? String ?? "Active",
+            hireDate <- dict["hireDate"] as? Double ?? Date().timeIntervalSince1970,
+            terminationDate <- dict["terminationDate"] as? Double,
+            notes <- dict["notes"] as? String,
+            rating <- dict["rating"] as? Double ?? 0,
+            createdAt <- dict["createdAt"] as? Double ?? Date().timeIntervalSince1970,
+            updatedAt <- dict["updatedAt"] as? Double ?? Date().timeIntervalSince1970
+        ))
+    }
+
+    private func importTrip(from dict: [String: Any]) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let tid = dict["id"] as? String else { return }
+        try db.run(trips.insert(
+            id <- tid,
+            jobNumber <- dict["jobNumber"] as? String ?? "",
+            customerId <- dict["customerId"] as? String ?? "",
+            tripDriverId <- dict["driverId"] as? String,
+            tripVehicleId <- dict["vehicleId"] as? String,
+            tripStatus <- dict["status"] as? String ?? "Pending",
+            pickupAddress <- dict["pickupAddress"] as? String ?? "",
+            pickupCity <- dict["pickupCity"] as? String ?? "",
+            pickupState <- dict["pickupState"] as? String ?? "",
+            pickupZip <- dict["pickupZip"] as? String ?? "",
+            pickupDate <- dict["pickupDate"] as? Double ?? Date().timeIntervalSince1970,
+            deliveryAddress <- dict["deliveryAddress"] as? String ?? "",
+            deliveryCity <- dict["deliveryCity"] as? String ?? "",
+            deliveryState <- dict["deliveryState"] as? String ?? "",
+            deliveryZip <- dict["deliveryZip"] as? String ?? "",
+            deliveryDate <- dict["deliveryDate"] as? Double,
+            distance <- dict["distance"] as? Double,
+            cargoDescription <- dict["cargoDescription"] as? String,
+            cargoWeight <- dict["cargoWeight"] as? Double,
+            rate <- dict["rate"] as? Double ?? 0,
+            fuelSurcharge <- dict["fuelSurcharge"] as? Double ?? 0,
+            totalAmount <- dict["totalAmount"] as? Double ?? 0,
+            notes <- dict["notes"] as? String,
+            createdAt <- dict["createdAt"] as? Double ?? Date().timeIntervalSince1970,
+            updatedAt <- dict["updatedAt"] as? Double ?? Date().timeIntervalSince1970
+        ))
+    }
+
+    private func importCustomer(from dict: [String: Any]) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let cid = dict["id"] as? String else { return }
+        try db.run(customers.insert(
+            id <- cid,
+            companyName <- dict["companyName"] as? String ?? "",
+            contactName <- dict["contactName"] as? String ?? "",
+            email <- dict["email"] as? String ?? "",
+            phone <- dict["phone"] as? String ?? "",
+            customerType <- dict["type"] as? String ?? "Commercial",
+            address <- dict["address"] as? String,
+            city <- dict["city"] as? String ?? "",
+            state <- dict["state"] as? String ?? "",
+            zip <- dict["zip"] as? String ?? "",
+            creditLimit <- dict["creditLimit"] as? Double ?? 0,
+            paymentTerms <- dict["paymentTerms"] as? Int ?? 30,
+            taxId <- dict["taxId"] as? String,
+            notes <- dict["notes"] as? String,
+            createdAt <- dict["createdAt"] as? Double ?? Date().timeIntervalSince1970,
+            updatedAt <- dict["updatedAt"] as? Double ?? Date().timeIntervalSince1970
+        ))
+    }
+
+    private func importInvoice(from dict: [String: Any]) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let iid = dict["id"] as? String else { return }
+        let tripIdStr = dict["tripIds"] as? String ?? ""
+        try db.run(invoices.insert(
+            id <- iid,
+            invoiceNumber <- dict["invoiceNumber"] as? String ?? "",
+            customerId <- dict["customerId"] as? String ?? "",
+            tripIds <- tripIdStr,
+            invoiceDate <- dict["invoiceDate"] as? Double ?? Date().timeIntervalSince1970,
+            dueDate <- dict["dueDate"] as? Double ?? Date().timeIntervalSince1970,
+            subtotal <- dict["subtotal"] as? Double ?? 0,
+            tax <- dict["tax"] as? Double ?? 0,
+            total <- dict["total"] as? Double ?? 0,
+            invoiceStatus <- dict["status"] as? String ?? "Draft",
+            paidDate <- dict["paidDate"] as? Double,
+            notes <- dict["notes"] as? String,
+            createdAt <- dict["createdAt"] as? Double ?? Date().timeIntervalSince1970,
+            updatedAt <- dict["updatedAt"] as? Double ?? Date().timeIntervalSince1970
+        ))
+        let tripIds = tripIdStr.split(separator: ",").map { String($0) }
+        for tid in tripIds {
+            try db.run(invoiceTrips.insert(
+                invoiceTripInvoiceId <- iid,
+                invoiceTripTripId <- tid
+            ))
+        }
+    }
+
+    private func importExpense(from dict: [String: Any]) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let eid = dict["id"] as? String else { return }
+        try db.run(expenses.insert(
+            id <- eid,
+            category <- dict["category"] as? String ?? "",
+            expenseVendor <- dict["vendor"] as? String,
+            description <- dict["description"] as? String ?? "",
+            amount <- dict["amount"] as? Double ?? 0,
+            date <- dict["date"] as? Double ?? Date().timeIntervalSince1970,
+            expenseVehicleId <- dict["vehicleId"] as? String,
+            expenseDriverId <- dict["driverId"] as? String,
+            receiptNumber <- dict["receiptNumber"] as? String,
+            notes <- dict["notes"] as? String,
+            createdAt <- dict["createdAt"] as? Double ?? Date().timeIntervalSince1970
+        ))
+    }
+
+    private func importMaintenanceRecord(from dict: [String: Any]) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let mid = dict["id"] as? String else { return }
+        try db.run(maintenanceRecords.insert(
+            id <- mid,
+            vehicleId <- dict["vehicleId"] as? String ?? "",
+            maintenanceType <- dict["type"] as? String ?? "",
+            description <- dict["description"] as? String ?? "",
+            date <- dict["date"] as? Double ?? Date().timeIntervalSince1970,
+            odometer <- dict["odometer"] as? Int ?? 0,
+            cost <- dict["cost"] as? Double ?? 0,
+            vendor <- dict["vendor"] as? String,
+            notes <- dict["notes"] as? String,
+            createdAt <- dict["createdAt"] as? Double ?? Date().timeIntervalSince1970
+        ))
+    }
+
+    private func importFuelLog(from dict: [String: Any]) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let fid = dict["id"] as? String else { return }
+        try db.run(fuelLogs.insert(
+            id <- fid,
+            vehicleId <- dict["vehicleId"] as? String ?? "",
+            date <- dict["date"] as? Double ?? Date().timeIntervalSince1970,
+            odometer <- dict["odometer"] as? Int ?? 0,
+            quantity <- dict["quantity"] as? Double ?? 0,
+            pricePerUnit <- dict["pricePerUnit"] as? Double ?? 0,
+            totalCost <- dict["totalCost"] as? Double ?? 0,
+            fuelType <- dict["fuelType"] as? String ?? "Diesel",
+            location <- dict["location"] as? String,
+            notes <- dict["notes"] as? String,
+            createdAt <- dict["createdAt"] as? Double ?? Date().timeIntervalSince1970
+        ))
+    }
+
+    private func importCertification(from dict: [String: Any]) throws {
+        guard let db = db else { throw DatabaseError.notConnected }
+        guard let cid = dict["id"] as? String else { return }
+        try db.run(certifications.insert(
+            id <- cid,
+            driverId <- dict["driverId"] as? String ?? "",
+            certificationType <- dict["type"] as? String ?? "",
+            name <- dict["name"] as? String ?? "",
+            issuedDate <- dict["issuedDate"] as? Double ?? Date().timeIntervalSince1970,
+            expiryDate <- dict["expiryDate"] as? Double,
+            documentNumber <- dict["documentNumber"] as? String,
+            createdAt <- dict["createdAt"] as? Double ?? Date().timeIntervalSince1970
+        ))
+    }
+
+    // MARK: - Export Helpers
+
+    private func vehicleToDict(_ v: Vehicle) -> [String: Any] {
+        var d: [String: Any] = [
+            "id": v.id.uuidString,
+            "name": v.name,
+            "type": v.type.rawValue,
+            "licensePlate": v.licensePlate,
+            "make": v.make,
+            "model": v.model,
+            "year": v.year,
+            "vin": v.vin,
+            "status": v.status.rawValue,
+            "currentOdometer": v.currentOdometer,
+            "fuelType": v.fuelType.rawValue,
+            "createdAt": v.createdAt.timeIntervalSince1970,
+            "updatedAt": v.updatedAt.timeIntervalSince1970
+        ]
+        if let pd = v.purchaseDate { d["purchaseDate"] = pd.timeIntervalSince1970 }
+        if let pp = v.purchasePrice { d["purchasePrice"] = pp }
+        if let n = v.notes { d["notes"] = n }
+        return d
+    }
+
+    private func driverToDict(_ d: Driver) -> [String: Any] {
+        var dict: [String: Any] = [
+            "id": d.id.uuidString,
+            "firstName": d.firstName,
+            "lastName": d.lastName,
+            "email": d.email,
+            "phone": d.phone,
+            "licenseNumber": d.licenseNumber,
+            "licenseState": d.licenseState,
+            "licenseExpiry": d.licenseExpiry.timeIntervalSince1970,
+            "status": d.status.rawValue,
+            "hireDate": d.hireDate.timeIntervalSince1970,
+            "rating": d.rating,
+            "createdAt": d.createdAt.timeIntervalSince1970,
+            "updatedAt": d.updatedAt.timeIntervalSince1970
+        ]
+        if let a = d.address { dict["address"] = a }
+        if let ec = d.emergencyContact { dict["emergencyContact"] = ec }
+        if let ep = d.emergencyPhone { dict["emergencyPhone"] = ep }
+        if let td = d.terminationDate { dict["terminationDate"] = td.timeIntervalSince1970 }
+        if let n = d.notes { dict["notes"] = n }
+        return dict
+    }
+
+    private func tripToDict(_ t: Trip) -> [String: Any] {
+        var d: [String: Any] = [
+            "id": t.id.uuidString,
+            "jobNumber": t.jobNumber,
+            "customerId": t.customerId.uuidString,
+            "status": t.status.rawValue,
+            "pickupAddress": t.pickupAddress,
+            "pickupCity": t.pickupCity,
+            "pickupState": t.pickupState,
+            "pickupZip": t.pickupZip,
+            "pickupDate": t.pickupDate.timeIntervalSince1970,
+            "deliveryAddress": t.deliveryAddress,
+            "deliveryCity": t.deliveryCity,
+            "deliveryState": t.deliveryState,
+            "deliveryZip": t.deliveryZip,
+            "rate": t.rate,
+            "fuelSurcharge": t.fuelSurcharge,
+            "totalAmount": t.totalAmount,
+            "createdAt": t.createdAt.timeIntervalSince1970,
+            "updatedAt": t.updatedAt.timeIntervalSince1970
+        ]
+        if let did = t.driverId { d["driverId"] = did.uuidString }
+        if let vid = t.vehicleId { d["vehicleId"] = vid.uuidString }
+        if let dd = t.deliveryDate { d["deliveryDate"] = dd.timeIntervalSince1970 }
+        if let dist = t.distance { d["distance"] = dist }
+        if let cd = t.cargoDescription { d["cargoDescription"] = cd }
+        if let cw = t.cargoWeight { d["cargoWeight"] = cw }
+        if let n = t.notes { d["notes"] = n }
+        return d
+    }
+
+    private func customerToDict(_ c: Customer) -> [String: Any] {
+        var d: [String: Any] = [
+            "id": c.id.uuidString,
+            "companyName": c.companyName,
+            "contactName": c.contactName,
+            "email": c.email,
+            "phone": c.phone,
+            "type": c.type.rawValue,
+            "city": c.city,
+            "state": c.state,
+            "zip": c.zip,
+            "creditLimit": c.creditLimit,
+            "paymentTerms": c.paymentTerms,
+            "createdAt": c.createdAt.timeIntervalSince1970,
+            "updatedAt": c.updatedAt.timeIntervalSince1970
+        ]
+        d["address"] = c.address
+        if let tid = c.taxId { d["taxId"] = tid }
+        if let n = c.notes { d["notes"] = n }
+        return d
+    }
+
+    private func invoiceToDict(_ inv: Invoice) -> [String: Any] {
+        var d: [String: Any] = [
+            "id": inv.id.uuidString,
+            "invoiceNumber": inv.invoiceNumber,
+            "customerId": inv.customerId.uuidString,
+            "tripIds": inv.tripIds.map { $0.uuidString }.joined(separator: ","),
+            "invoiceDate": inv.invoiceDate.timeIntervalSince1970,
+            "dueDate": inv.dueDate.timeIntervalSince1970,
+            "subtotal": inv.subtotal,
+            "tax": inv.tax,
+            "total": inv.total,
+            "status": inv.status.rawValue,
+            "createdAt": inv.createdAt.timeIntervalSince1970,
+            "updatedAt": inv.updatedAt.timeIntervalSince1970
+        ]
+        if let pd = inv.paidDate { d["paidDate"] = pd.timeIntervalSince1970 }
+        if let n = inv.notes { d["notes"] = n }
+        return d
+    }
+
+    private func expenseToDict(_ e: Expense) -> [String: Any] {
+        var d: [String: Any] = [
+            "id": e.id.uuidString,
+            "category": e.category.rawValue,
+            "description": e.description,
+            "amount": e.amount,
+            "date": e.date.timeIntervalSince1970,
+            "createdAt": e.createdAt.timeIntervalSince1970
+        ]
+        if let v = e.vendor { d["vendor"] = v }
+        if let vid = e.vehicleId { d["vehicleId"] = vid.uuidString }
+        if let did = e.driverId { d["driverId"] = did.uuidString }
+        if let rn = e.receiptNumber { d["receiptNumber"] = rn }
+        if let n = e.notes { d["notes"] = n }
+        return d
+    }
+
+    private func maintenanceRecordToDict(_ r: MaintenanceRecord) -> [String: Any] {
+        var d: [String: Any] = [
+            "id": r.id.uuidString,
+            "vehicleId": r.vehicleId.uuidString,
+            "type": r.type.rawValue,
+            "description": r.description,
+            "date": r.date.timeIntervalSince1970,
+            "odometer": r.odometer,
+            "cost": r.cost,
+            "createdAt": r.createdAt.timeIntervalSince1970
+        ]
+        if let v = r.vendor { d["vendor"] = v }
+        if let n = r.notes { d["notes"] = n }
+        return d
+    }
+
+    private func fuelLogToDict(_ l: FuelLog) -> [String: Any] {
+        var d: [String: Any] = [
+            "id": l.id.uuidString,
+            "vehicleId": l.vehicleId.uuidString,
+            "date": l.date.timeIntervalSince1970,
+            "odometer": l.odometer,
+            "quantity": l.quantity,
+            "pricePerUnit": l.pricePerUnit,
+            "totalCost": l.totalCost,
+            "fuelType": l.fuelType.rawValue,
+            "createdAt": l.createdAt.timeIntervalSince1970
+        ]
+        if let loc = l.location { d["location"] = loc }
+        if let n = l.notes { d["notes"] = n }
+        return d
+    }
+
+    private func certificationToDict(_ c: Certification) -> [String: Any] {
+        var d: [String: Any] = [
+            "id": c.id.uuidString,
+            "driverId": c.driverId.uuidString,
+            "type": c.type.rawValue,
+            "name": c.name,
+            "issuedDate": c.issuedDate.timeIntervalSince1970,
+            "createdAt": c.createdAt.timeIntervalSince1970
+        ]
+        if let ed = c.expiryDate { d["expiryDate"] = ed.timeIntervalSince1970 }
+        if let dn = c.documentNumber { d["documentNumber"] = dn }
+        return d
     }
 }

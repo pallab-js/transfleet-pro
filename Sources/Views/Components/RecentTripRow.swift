@@ -14,7 +14,7 @@ struct RecentTripRow: View {
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
-                Text("\(trip.pickupCity) → \(trip.deliveryCity)")
+                Text("\(trip.pickupCity) -> \(trip.deliveryCity)")
                     .font(.subheadline)
                     .foregroundColor(.secondary)
             }
@@ -22,13 +22,7 @@ struct RecentTripRow: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 4) {
-                Text(trip.status.rawValue)
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(trip.status.color.opacity(0.2))
-                    .foregroundColor(trip.status.color)
-                    .cornerRadius(4)
+                StatusBadge(status: trip.status.rawValue, color: trip.status.color)
 
                 HStack(spacing: 8) {
                     Text(trip.pickupDate, style: .date)

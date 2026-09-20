@@ -39,5 +39,6 @@ struct MetricCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(12)
+        .accessibilityElement(children: .combine)
     }
 }
