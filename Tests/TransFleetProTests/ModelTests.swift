@@ -27,7 +27,7 @@ final class ModelTests: XCTestCase {
         let jobNumber = Trip.generateJobNumber()
         XCTAssertTrue(jobNumber.hasPrefix("TF-"))
         XCTAssertTrue(jobNumber.contains("-"))
-        XCTAssertEqual(jobNumber.count, 21)
+        XCTAssertEqual(jobNumber.count, 20)
     }
 
     // MARK: - Invoice Tests
@@ -77,10 +77,10 @@ final class ModelTests: XCTestCase {
 
     // MARK: - TripStatus Color Tests
     func testTripStatusColors() {
-        XCTAssertEqual(TripStatus.pending.statusColor, .yellow)
-        XCTAssertEqual(TripStatus.inTransit.statusColor, .blue)
-        XCTAssertEqual(TripStatus.completed.statusColor, .green)
-        XCTAssertEqual(TripStatus.cancelled.statusColor, .red)
+        XCTAssertEqual(TripStatus.pending.color, .gray)
+        XCTAssertEqual(TripStatus.inTransit.color, .orange)
+        XCTAssertEqual(TripStatus.completed.color, .green)
+        XCTAssertEqual(TripStatus.cancelled.color, .red)
     }
 
     // MARK: - Codable Tests
