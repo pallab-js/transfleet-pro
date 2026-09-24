@@ -319,7 +319,7 @@ struct CreateInvoiceView: View {
     @State private var taxRate: Double = 0
     @State private var notes: String = ""
 
-    private var taxAmount: Double { subtotal * taxRate / 100 }
+    private var taxAmount: Double { (subtotal * taxRate / 100.0 * 100.0).rounded() / 100.0 }
     private var total: Double { subtotal + taxAmount }
 
     init(customers: [Customer], onSave: @escaping (Invoice) -> Void) {
@@ -430,7 +430,7 @@ struct EditInvoiceView: View {
     @State private var notes: String
     @State private var status: InvoiceStatus
 
-    private var taxAmount: Double { subtotal * taxRate / 100 }
+    private var taxAmount: Double { (subtotal * taxRate / 100.0 * 100.0).rounded() / 100.0 }
     private var total: Double { subtotal + taxAmount }
 
     init(invoice: Invoice, customers: [Customer], onSave: @escaping (Invoice) -> Void) {
@@ -441,7 +441,8 @@ struct EditInvoiceView: View {
         _invoiceDate = State(initialValue: invoice.invoiceDate)
         _dueDate = State(initialValue: invoice.dueDate)
         _subtotal = State(initialValue: invoice.subtotal)
-        _taxRate = State(initialValue: invoice.subtotal > 0 ? (invoice.tax / invoice.subtotal * 100) : 0)
+        let computedRate = invoice.subtotal > 0 ? (invoice.tax / invoice.subtotal * 100.0) : 0
+        _taxRate = State(initialValue: (computedRate * 100.0).rounded() / 100.0)
         _notes = State(initialValue: invoice.notes ?? "")
         _status = State(initialValue: invoice.status)
     }

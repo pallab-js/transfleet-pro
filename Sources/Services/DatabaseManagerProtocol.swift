@@ -59,4 +59,5 @@ protocol DatabaseManagerProtocol {
 
     func exportAllData() throws -> Data
     func importAllData(from data: Data) throws
+    func seedDemoData() throws
 }

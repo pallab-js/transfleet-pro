@@ -169,7 +169,7 @@ class DriverViewModel: ObservableObject {
     func isLicenseExpiring(_ driver: Driver, withinDays: Int = 30) -> Bool {
         let now = Date()
         let futureDate = now.addingTimeInterval(Double(withinDays) * 24 * 60 * 60)
-        return driver.licenseExpiry > now && driver.licenseExpiry <= futureDate && driver.status == .active
+        return driver.licenseExpiry <= futureDate && driver.status == .active
     }
 }
 
@@ -484,6 +484,15 @@ class SettingsViewModel: ObservableObject {
     func resetToDefaults() {
         settings = .default
         saveSettings()
+    }
+
+    func seedDemoData() {
+        do {
+            try DatabaseManager.shared.seedDemoData()
+            loadData()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func exportData() -> URL? {

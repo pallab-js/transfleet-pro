@@ -132,4 +132,41 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(expense.category, decoded.category)
         XCTAssertEqual(expense.amount, decoded.amount)
     }
+
+    // MARK: - Driver License Expiry Tests
+    @MainActor
+    func testDriverLicenseExpiryLogic() {
+        let vm = DriverViewModel()
+        let pastExpiry = Date().addingTimeInterval(-10 * 86400)
+        let soonExpiry = Date().addingTimeInterval(10 * 86400)
+        let farExpiry = Date().addingTimeInterval(60 * 86400)
+
+        let expiredDriver = Driver(firstName: "Expired", lastName: "Driver", email: "a@b.com", phone: "123", licenseNumber: "L1", licenseState: "CA", licenseExpiry: pastExpiry, status: .active, hireDate: Date(), rating: 5.0)
+        let soonDriver = Driver(firstName: "Soon", lastName: "Driver", email: "a@b.com", phone: "123", licenseNumber: "L2", licenseState: "CA", licenseExpiry: soonExpiry, status: .active, hireDate: Date(), rating: 5.0)
+        let farDriver = Driver(firstName: "Far", lastName: "Driver", email: "a@b.com", phone: "123", licenseNumber: "L3", licenseState: "CA", licenseExpiry: farExpiry, status: .active, hireDate: Date(), rating: 5.0)
+
+        XCTAssertTrue(vm.isLicenseExpiring(expiredDriver), "Expired driver license must be flagged")
+        XCTAssertTrue(vm.isLicenseExpiring(soonDriver), "Driver license expiring within 30 days must be flagged")
+        XCTAssertFalse(vm.isLicenseExpiring(farDriver), "Driver license expiring beyond 30 days must not be flagged")
+    }
+
+    // MARK: - Pagination State Tests
+    func testPaginationTotalPages() {
+        var state = PaginationState()
+        state.itemsPerPage = 25
+        XCTAssertEqual(state.totalPages(for: 0), 1)
+        XCTAssertEqual(state.totalPages(for: 10), 1)
+        XCTAssertEqual(state.totalPages(for: 25), 1)
+        XCTAssertEqual(state.totalPages(for: 26), 2)
+        XCTAssertEqual(state.totalPages(for: 100), 4)
+    }
+
+    // MARK: - Currency Formatter Tests
+    @MainActor
+    func testCurrencyFormatter() {
+        let val: Double = 1234.56
+        XCTAssertTrue(val.formattedAsCurrency().contains("1,234.56") || val.formattedAsCurrency().contains("1.234,56"))
+        let EURFormatted = val.formattedAsCurrency(currencyCode: "EUR")
+        XCTAssertTrue(EURFormatted.contains("1,234.56") || EURFormatted.contains("1.234,56") || EURFormatted.contains("€"))
+    }
 }

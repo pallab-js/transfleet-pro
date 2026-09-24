@@ -179,6 +179,10 @@ final class DatabaseManager: DatabaseManagerProtocol {
             migrateIfNeeded()
             createTables()
             databaseError = nil
+
+            if (try? getAllVehicles().isEmpty) == true {
+                try? seedDemoData()
+            }
         } catch {
             let msg = "Failed to initialize database: \(error.localizedDescription)"
             databaseError = msg
@@ -2032,4 +2036,516 @@ final class DatabaseManager: DatabaseManagerProtocol {
         if let dn = c.documentNumber { d["documentNumber"] = dn }
         return d
     }
+
+    // MARK: - Demo Data Seeding
+
+    func seedDemoData() throws {
+        // 1. Business Settings
+        let settings = BusinessSettings(
+            companyName: "TransFleet Logistics Corp",
+            address: "100 Fleet Way, Suite 400",
+            city: "Dallas",
+            state: "TX",
+            zip: "75201",
+            phone: "(214) 555-0199",
+            email: "operations@transfleetcorp.com",
+            taxRate: 8.25,
+            currency: "USD",
+            distanceUnit: "miles",
+            invoicePrefix: "INV"
+        )
+        try saveSettings(settings)
+
+        // 2. Customers
+        let customer1 = Customer(
+            companyName: "Acme Retail Corp",
+            contactName: "Sarah Connor",
+            email: "sconnor@acmeretail.com",
+            phone: "(312) 555-0142",
+            type: .commercial,
+            address: "450 Industrial Pkwy",
+            city: "Chicago",
+            state: "IL",
+            zip: "60601",
+            creditLimit: 50000.0,
+            paymentTerms: 30,
+            taxId: "TX-9982341-A",
+            notes: "High volume enterprise freight account"
+        )
+        let customer2 = Customer(
+            companyName: "Global Distribution Inc",
+            contactName: "Michael Scott",
+            email: "mscott@globaldist.com",
+            phone: "(713) 555-0188",
+            type: .commercial,
+            address: "880 Commerce Blvd",
+            city: "Houston",
+            state: "TX",
+            zip: "77002",
+            creditLimit: 75000.0,
+            paymentTerms: 15,
+            taxId: "TX-4439120-B",
+            notes: "Requires temperature-controlled transport for select routes"
+        )
+        let customer3 = Customer(
+            companyName: "Apex Industrial Supply",
+            contactName: "James Vance",
+            email: "jvance@apexsupply.com",
+            phone: "(404) 555-0123",
+            type: .commercial,
+            address: "1200 Logistics Way",
+            city: "Atlanta",
+            state: "GA",
+            zip: "30301",
+            creditLimit: 30000.0,
+            paymentTerms: 30,
+            taxId: "GA-1192834-C",
+            notes: "Flatbed freight specialist shipments"
+        )
+
+        try saveCustomer(customer1)
+        try saveCustomer(customer2)
+        try saveCustomer(customer3)
+
+        // 3. Vehicles
+        var v1 = Vehicle(
+            name: "Freightliner Cascadia #101",
+            type: .truck,
+            licensePlate: "TX-8942-FL",
+            make: "Freightliner",
+            model: "Cascadia 126",
+            year: 2023,
+            vin: "1FUJGLDR8PL102938",
+            status: .available,
+            purchaseDate: Date().addingTimeInterval(-365 * 86400 * 2),
+            purchasePrice: 145000.0,
+            currentOdometer: 84200,
+            fuelType: .diesel,
+            notes: "Equipped with sleeper cab and APU unit"
+        )
+        var v2 = Vehicle(
+            name: "Volvo VNL 860 #102",
+            type: .truck,
+            licensePlate: "TX-5519-VL",
+            make: "Volvo",
+            model: "VNL 860",
+            year: 2024,
+            vin: "4V4NC9EH8RN908123",
+            status: .inUse,
+            purchaseDate: Date().addingTimeInterval(-365 * 86400),
+            purchasePrice: 162000.0,
+            currentOdometer: 42150,
+            fuelType: .diesel,
+            notes: "Long haul primary fleet flagship"
+        )
+        var v3 = Vehicle(
+            name: "Ford Transit 350 HD",
+            type: .van,
+            licensePlate: "TX-2294-FT",
+            make: "Ford",
+            model: "Transit 350 HD",
+            year: 2022,
+            vin: "1FTBR1Y84NKA38192",
+            status: .available,
+            purchaseDate: Date().addingTimeInterval(-365 * 86400 * 3),
+            purchasePrice: 58000.0,
+            currentOdometer: 61400,
+            fuelType: .gasoline,
+            notes: "High roof cargo van for regional last-mile delivery"
+        )
+        var v4 = Vehicle(
+            name: "Peterbilt 579 #104",
+            type: .truck,
+            licensePlate: "TX-9901-PB",
+            make: "Peterbilt",
+            model: "579 Ultraloft",
+            year: 2021,
+            vin: "1XPBD49X1MD829401",
+            status: .maintenance,
+            purchaseDate: Date().addingTimeInterval(-365 * 86400 * 4),
+            purchasePrice: 138000.0,
+            currentOdometer: 198500,
+            fuelType: .diesel,
+            notes: "Scheduled for 200k mile comprehensive overhaul"
+        )
+        var v5 = Vehicle(
+            name: "Isuzu NPR HD Box Truck",
+            type: .truck,
+            licensePlate: "TX-7731-IZ",
+            make: "Isuzu",
+            model: "NPR HD 16ft Box",
+            year: 2023,
+            vin: "JALC4B160P7102934",
+            status: .available,
+            purchaseDate: Date().addingTimeInterval(-365 * 86400 * 2),
+            purchasePrice: 72000.0,
+            currentOdometer: 38900,
+            fuelType: .diesel,
+            notes: "Equipped with 2500lb hydraulic liftgate"
+        )
+
+        try saveVehicle(v1)
+        try saveVehicle(v2)
+        try saveVehicle(v3)
+        try saveVehicle(v4)
+        try saveVehicle(v5)
+
+        // 4. Drivers
+        let now = Date()
+        let expSoon = now.addingTimeInterval(15 * 86400) // 15 days out -> triggers warning
+        let expNormal1 = now.addingTimeInterval(365 * 86400)
+        let expNormal2 = now.addingTimeInterval(500 * 86400)
+        let expNormal3 = now.addingTimeInterval(200 * 86400)
+
+        var d1 = Driver(
+            firstName: "Marcus",
+            lastName: "Johnson",
+            email: "mjohnson@transfleetcorp.com",
+            phone: "(214) 555-0812",
+            address: "1420 Elm Street, Dallas, TX 75201",
+            emergencyContact: "Brenda Johnson (Wife)",
+            emergencyPhone: "(214) 555-0819",
+            licenseNumber: "CDL-TX-88219401",
+            licenseState: "TX",
+            licenseExpiry: expSoon,
+            status: .active,
+            hireDate: now.addingTimeInterval(-365 * 86400 * 3),
+            notes: "Senior interstate haul lead driver",
+            rating: 4.9
+        )
+        var d2 = Driver(
+            firstName: "Elena",
+            lastName: "Rostova",
+            email: "erostova@transfleetcorp.com",
+            phone: "(713) 555-0934",
+            address: "3302 Washington Ave, Houston, TX 77007",
+            emergencyContact: "Dmitri Rostov (Brother)",
+            emergencyPhone: "(713) 555-0940",
+            licenseNumber: "CDL-TX-99381023",
+            licenseState: "TX",
+            licenseExpiry: expNormal1,
+            status: .active,
+            hireDate: now.addingTimeInterval(-365 * 86400 * 2),
+            notes: "Hazmat & Tanker endorsement certified",
+            rating: 4.8
+        )
+        var d3 = Driver(
+            firstName: "David",
+            lastName: "Miller",
+            email: "dmiller@transfleetcorp.com",
+            phone: "(404) 555-0455",
+            address: "812 Peachtree St, Atlanta, GA 30308",
+            emergencyContact: "Karen Miller (Spouse)",
+            emergencyPhone: "(404) 555-0456",
+            licenseNumber: "CDL-GA-44102938",
+            licenseState: "GA",
+            licenseExpiry: expNormal2,
+            status: .active,
+            hireDate: now.addingTimeInterval(-365 * 86400),
+            notes: "Regional Southeast routes specialist",
+            rating: 4.7
+        )
+        var d4 = Driver(
+            firstName: "Robert",
+            lastName: "Taylor",
+            email: "rtaylor@transfleetcorp.com",
+            phone: "(312) 555-0677",
+            address: "540 N Michigan Ave, Chicago, IL 60611",
+            emergencyContact: "Susan Taylor (Sister)",
+            emergencyPhone: "(312) 555-0678",
+            licenseNumber: "CDL-IL-77281934",
+            licenseState: "IL",
+            licenseExpiry: expNormal3,
+            status: .onLeave,
+            hireDate: now.addingTimeInterval(-365 * 86400 * 4),
+            notes: "On medical leave until next month",
+            rating: 4.6
+        )
+
+        try saveDriver(d1)
+        try saveDriver(d2)
+        try saveDriver(d3)
+        try saveDriver(d4)
+
+        // 5. Driver Certifications
+        let cert1 = Certification(
+            driverId: d1.id,
+            type: .cdl,
+            name: "Class A Commercial Driver License",
+            issuedDate: now.addingTimeInterval(-365 * 86400 * 3),
+            expiryDate: expSoon,
+            documentNumber: "CDL-TX-88219401"
+        )
+        let cert2 = Certification(
+            driverId: d2.id,
+            type: .hazmat,
+            name: "Hazardous Materials Endorsement (HME)",
+            issuedDate: now.addingTimeInterval(-365 * 86400),
+            expiryDate: expNormal1,
+            documentNumber: "HAZ-TX-99381023"
+        )
+        try saveCertification(cert1)
+        try saveCertification(cert2)
+
+        // 6. Trips
+        var t1 = Trip(
+            jobNumber: "TF-20260920-001",
+            customerId: customer2.id,
+            driverId: d2.id,
+            vehicleId: v2.id,
+            status: .inTransit,
+            pickupAddress: "880 Commerce Blvd",
+            pickupCity: "Houston",
+            pickupState: "TX",
+            pickupZip: "77002",
+            pickupDate: now.addingTimeInterval(-86400),
+            deliveryAddress: "100 Logistics Pkwy",
+            deliveryCity: "Dallas",
+            deliveryState: "TX",
+            deliveryZip: "75201",
+            deliveryDate: now.addingTimeInterval(86400),
+            distance: 240.0,
+            cargoDescription: "Commercial HVAC Components",
+            cargoWeight: 18500.0,
+            rate: 1850.0,
+            fuelSurcharge: 220.0,
+            totalAmount: 2070.0,
+            notes: "Temperature sensitive cargo - monitor APU"
+        )
+        var t2 = Trip(
+            jobNumber: "TF-20260915-002",
+            customerId: customer1.id,
+            driverId: d1.id,
+            vehicleId: v1.id,
+            status: .completed,
+            pickupAddress: "450 Industrial Pkwy",
+            pickupCity: "Chicago",
+            pickupState: "IL",
+            pickupZip: "60601",
+            pickupDate: now.addingTimeInterval(-10 * 86400),
+            deliveryAddress: "500 Freight Way",
+            deliveryCity: "Indianapolis",
+            deliveryState: "IN",
+            deliveryZip: "46201",
+            deliveryDate: now.addingTimeInterval(-9 * 86400),
+            distance: 180.0,
+            cargoDescription: "Retail Merchandise Pallets",
+            cargoWeight: 24000.0,
+            rate: 2400.0,
+            fuelSurcharge: 310.0,
+            totalAmount: 2710.0,
+            notes: "On-time delivery confirmed by receiver"
+        )
+        var t3 = Trip(
+            jobNumber: "TF-20260918-003",
+            customerId: customer3.id,
+            driverId: d3.id,
+            vehicleId: v3.id,
+            status: .delivered,
+            pickupAddress: "1200 Logistics Way",
+            pickupCity: "Atlanta",
+            pickupState: "GA",
+            pickupZip: "30301",
+            pickupDate: now.addingTimeInterval(-5 * 86400),
+            deliveryAddress: "300 Commerce St",
+            deliveryCity: "Nashville",
+            deliveryState: "TN",
+            deliveryZip: "37201",
+            deliveryDate: now.addingTimeInterval(-4 * 86400),
+            distance: 250.0,
+            cargoDescription: "Industrial Machinery Parts",
+            cargoWeight: 12000.0,
+            rate: 1950.0,
+            fuelSurcharge: 200.0,
+            totalAmount: 2150.0,
+            notes: "Delivered cleanly, awaiting POD sign-off"
+        )
+        var t4 = Trip(
+            jobNumber: "TF-20260924-004",
+            customerId: customer1.id,
+            driverId: nil,
+            vehicleId: nil,
+            status: .pending,
+            pickupAddress: "100 Sky Harbor Blvd",
+            pickupCity: "Phoenix",
+            pickupState: "AZ",
+            pickupZip: "85034",
+            pickupDate: now.addingTimeInterval(2 * 86400),
+            deliveryAddress: "900 Alameda St",
+            deliveryCity: "Los Angeles",
+            deliveryState: "CA",
+            deliveryZip: "90012",
+            deliveryDate: now.addingTimeInterval(3 * 86400),
+            distance: 370.0,
+            cargoDescription: "Electronics & Consumer Goods",
+            cargoWeight: 31000.0,
+            rate: 3100.0,
+            fuelSurcharge: 400.0,
+            totalAmount: 3500.0,
+            notes: "Pending dispatch assignment"
+        )
+
+        try saveTrip(t1)
+        try saveTrip(t2)
+        try saveTrip(t3)
+        try saveTrip(t4)
+
+        // 7. Invoices
+        var inv1 = Invoice(
+            invoiceNumber: "INV-202609-001",
+            customerId: customer1.id,
+            tripIds: [t2.id],
+            invoiceDate: now.addingTimeInterval(-8 * 86400),
+            dueDate: now.addingTimeInterval(22 * 86400),
+            subtotal: 2400.0,
+            tax: 198.0,
+            total: 2710.0,
+            status: .paid,
+            paidDate: now.addingTimeInterval(-2 * 86400),
+            notes: "Paid via ACH transfer"
+        )
+        var inv2 = Invoice(
+            invoiceNumber: "INV-202609-002",
+            customerId: customer3.id,
+            tripIds: [t3.id],
+            invoiceDate: now.addingTimeInterval(-3 * 86400),
+            dueDate: now.addingTimeInterval(27 * 86400),
+            subtotal: 1950.0,
+            tax: 160.88,
+            total: 2150.0,
+            status: .sent,
+            paidDate: nil,
+            notes: "Invoice sent to billing department"
+        )
+        var inv3 = Invoice(
+            invoiceNumber: "INV-202608-015",
+            customerId: customer2.id,
+            tripIds: [t1.id],
+            invoiceDate: now.addingTimeInterval(-45 * 86400),
+            dueDate: now.addingTimeInterval(-15 * 86400),
+            subtotal: 3100.0,
+            tax: 255.75,
+            total: 3500.0,
+            status: .overdue,
+            paidDate: nil,
+            notes: "Past due notice issued via email"
+        )
+
+        try saveInvoice(inv1)
+        try saveInvoice(inv2)
+        try saveInvoice(inv3)
+
+        // 8. Expenses
+        let e1 = Expense(
+            category: .fuel,
+            vendor: "Shell Fleet Services",
+            description: "Diesel fuel refill - Freightliner #101",
+            amount: 485.50,
+            date: now.addingTimeInterval(-2 * 86400),
+            vehicleId: v1.id,
+            driverId: d1.id,
+            receiptNumber: "SH-992014",
+            notes: "Full tank 125 gal @ $3.88/gal"
+        )
+        let e2 = Expense(
+            category: .maintenance,
+            vendor: "FleetCare Service Center",
+            description: "200k mile transmission & brake service",
+            amount: 1450.00,
+            date: now.addingTimeInterval(-4 * 86400),
+            vehicleId: v4.id,
+            driverId: nil,
+            receiptNumber: "FC-881923",
+            notes: "Replaced front brake pads & rotors"
+        )
+        let e3 = Expense(
+            category: .insurance,
+            vendor: "Progressive Commercial Insurance",
+            description: "Monthly fleet commercial liability policy",
+            amount: 3200.00,
+            date: now.addingTimeInterval(-12 * 86400),
+            vehicleId: nil,
+            driverId: nil,
+            receiptNumber: "PRG-202609-POL",
+            notes: "Standard monthly premium payment"
+        )
+        let e4 = Expense(
+            category: .payroll,
+            vendor: "ADP Payroll Services",
+            description: "Bi-weekly driver payroll distribution",
+            amount: 7850.00,
+            date: now.addingTimeInterval(-7 * 86400),
+            vehicleId: nil,
+            driverId: nil,
+            receiptNumber: "ADP-773910",
+            notes: "Covered 4 active driver salaries"
+        )
+        let e5 = Expense(
+            category: .fuel,
+            vendor: "Pilot Flying J",
+            description: "Diesel fuel refill - Volvo VNL #102",
+            amount: 512.30,
+            date: now.addingTimeInterval(-1 * 86400),
+            vehicleId: v2.id,
+            driverId: d2.id,
+            receiptNumber: "PFJ-448102",
+            notes: "Interstate route fillup"
+        )
+
+        try saveExpense(e1)
+        try saveExpense(e2)
+        try saveExpense(e3)
+        try saveExpense(e4)
+        try saveExpense(e5)
+
+        // 9. Maintenance Records & Fuel Logs
+        let m1 = MaintenanceRecord(
+            vehicleId: v4.id,
+            type: .brakeService,
+            description: "Front and rear brake shoe replacement",
+            date: now.addingTimeInterval(-4 * 86400),
+            odometer: 198500,
+            cost: 1450.0,
+            vendor: "FleetCare Service Center",
+            notes: "Passed safety inspection following service"
+        )
+        let m2 = MaintenanceRecord(
+            vehicleId: v1.id,
+            type: .oilChange,
+            description: "Synthetic engine oil and filter change",
+            date: now.addingTimeInterval(-20 * 86400),
+            odometer: 82000,
+            cost: 380.0,
+            vendor: "Speedy Truck Lube",
+            notes: "Next service due at 95,000 miles"
+        )
+        try saveMaintenanceRecord(m1)
+        try saveMaintenanceRecord(m2)
+
+        let f1 = FuelLog(
+            vehicleId: v1.id,
+            date: now.addingTimeInterval(-2 * 86400),
+            odometer: 84200,
+            quantity: 125.0,
+            pricePerUnit: 3.88,
+            totalCost: 485.50,
+            fuelType: .diesel,
+            location: "Dallas, TX - Shell Station #402",
+            notes: nil
+        )
+        let f2 = FuelLog(
+            vehicleId: v2.id,
+            date: now.addingTimeInterval(-1 * 86400),
+            odometer: 42150,
+            quantity: 130.0,
+            pricePerUnit: 3.94,
+            totalCost: 512.30,
+            fuelType: .diesel,
+            location: "Houston, TX - Pilot Flying J #110",
+            notes: nil
+        )
+        try saveFuelLog(f1)
+        try saveFuelLog(f2)
+    }
+
 }

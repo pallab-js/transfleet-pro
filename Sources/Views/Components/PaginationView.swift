@@ -13,7 +13,10 @@ struct PaginationState {
         return items[start..<end]
     }
 
-    var totalPages: Int { 1 }
+    func totalPages(for totalItems: Int) -> Int {
+        guard totalItems > 0 else { return 1 }
+        return Int(ceil(Double(totalItems) / Double(itemsPerPage)))
+    }
 
     mutating func reset() { currentPage = 1 }
 }
@@ -23,8 +26,7 @@ struct PaginationView: View {
     let totalItems: Int
 
     private var totalPages: Int {
-        guard totalItems > 0 else { return 1 }
-        return Int(ceil(Double(totalItems) / Double(state.itemsPerPage)))
+        state.totalPages(for: totalItems)
     }
 
     var body: some View {

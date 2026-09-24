@@ -5,8 +5,10 @@ struct SettingsView: View {
     @StateObject private var viewModel = SettingsViewModel()
     @State private var showExportSuccess = false
     @State private var showResetSuccess = false
+    @State private var showSeedSuccess = false
     @State private var showSaveSuccess = false
     @State private var showResetConfirmation = false
+    @State private var showSeedConfirmation = false
     @State private var toastTask: Task<Void, Never>?
 
     var body: some View {
@@ -29,11 +31,11 @@ struct SettingsView: View {
             viewModel.loadData()
         }
         .overlay(alignment: .bottom) {
-            if showSaveSuccess || showExportSuccess || showResetSuccess {
+            if showSaveSuccess || showExportSuccess || showResetSuccess || showSeedSuccess {
                 HStack {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
-                    Text(showSaveSuccess ? "Settings saved!" : showExportSuccess ? "Data exported successfully!" : "Settings reset to defaults")
+                    Text(showSaveSuccess ? "Settings saved!" : showExportSuccess ? "Data exported successfully!" : showSeedSuccess ? "Demo data loaded successfully!" : "Settings reset to defaults")
                 }
                 .padding()
                 .background(Color(NSColor.controlBackgroundColor))
@@ -50,6 +52,7 @@ struct SettingsView: View {
                             showSaveSuccess = false
                             showExportSuccess = false
                             showResetSuccess = false
+                            showSeedSuccess = false
                         }
                     }
                 }
@@ -197,6 +200,25 @@ struct SettingsView: View {
             VStack(spacing: 12) {
                 HStack {
                     VStack(alignment: .leading) {
+                        Text("Seed Demo Data")
+                            .font(.headline)
+                        Text("Populate sample fleet, drivers, trips, invoices, and expenses for demonstration")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button("Load Demo Data") {
+                        showSeedConfirmation = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+
+                Divider()
+
+                HStack {
+                    VStack(alignment: .leading) {
                         Text("Export Data")
                             .font(.headline)
                         Text("Export all your data as JSON file")
@@ -265,6 +287,19 @@ struct SettingsView: View {
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
             .cornerRadius(12)
+        }
+        .confirmationDialog(
+            "Load Demo Data",
+            isPresented: $showSeedConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Load Sample Presentation Data") {
+                viewModel.seedDemoData()
+                showSeedSuccess = true
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will populate sample vehicles, drivers, trips, customers, invoices, and expenses for project presentation.")
         }
         .confirmationDialog(
             "Reset Settings",
