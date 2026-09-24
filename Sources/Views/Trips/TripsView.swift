@@ -368,6 +368,11 @@ struct TripFormView: View {
                 tripToSave.customerId = customerId
                 tripToSave.driverId = driverId
                 tripToSave.vehicleId = vehicleId
+                if (status == .delivered || status == .completed) && tripToSave.deliveryDate == nil {
+                    tripToSave.deliveryDate = Date()
+                } else if status == .pending || status == .assigned || status == .inTransit {
+                    tripToSave.deliveryDate = nil
+                }
                 tripToSave.status = status
                 tripToSave.pickupAddress = pickupAddress
                 tripToSave.pickupCity = pickupCity

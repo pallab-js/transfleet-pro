@@ -526,6 +526,11 @@ struct EditInvoiceView: View {
                     updated.subtotal = subtotal
                     updated.tax = taxAmount
                     updated.total = total
+                    if status == .paid && updated.paidDate == nil {
+                        updated.paidDate = Date()
+                    } else if status != .paid {
+                        updated.paidDate = nil
+                    }
                     updated.status = status
                     updated.notes = notes.isEmpty ? nil : notes
                     onSave(updated)

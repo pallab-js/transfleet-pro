@@ -6,8 +6,15 @@ struct PaginationState {
 
     var pageSizeOptions: [Int] { [25, 50, 100] }
 
+    func validCurrentPage(for totalItems: Int) -> Int {
+        let maxPage = totalPages(for: totalItems)
+        return max(1, min(currentPage, maxPage))
+    }
+
     func page<T>(_ items: [T]) -> ArraySlice<T> {
-        let start = (currentPage - 1) * itemsPerPage
+        guard !items.isEmpty else { return [] }
+        let validPage = validCurrentPage(for: items.count)
+        let start = (validPage - 1) * itemsPerPage
         let end = min(start + itemsPerPage, items.count)
         guard start < items.count else { return [] }
         return items[start..<end]
@@ -29,6 +36,10 @@ struct PaginationView: View {
         state.totalPages(for: totalItems)
     }
 
+    private var displayPage: Int {
+        state.validCurrentPage(for: totalItems)
+    }
+
     var body: some View {
         HStack(spacing: DesignTokens.Spacing.lg) {
             Picker("Per page", selection: $state.itemsPerPage) {
@@ -48,20 +59,20 @@ struct PaginationView: View {
             Spacer()
 
             HStack(spacing: DesignTokens.Spacing.sm) {
-                Button(action: { if state.currentPage > 1 { state.currentPage -= 1 } }) {
+                Button(action: { if displayPage > 1 { state.currentPage = displayPage - 1 } }) {
                     Image(systemName: "chevron.left")
                 }
-                .disabled(state.currentPage <= 1)
+                .disabled(displayPage <= 1)
                 .buttonStyle(.borderless)
 
-                Text("Page \(state.currentPage) of \(totalPages)")
+                Text("Page \(displayPage) of \(totalPages)")
                     .font(.caption)
                     .foregroundColor(.secondary)
 
-                Button(action: { if state.currentPage < totalPages { state.currentPage += 1 } }) {
+                Button(action: { if displayPage < totalPages { state.currentPage = displayPage + 1 } }) {
                     Image(systemName: "chevron.right")
                 }
-                .disabled(state.currentPage >= totalPages)
+                .disabled(displayPage >= totalPages)
                 .buttonStyle(.borderless)
             }
         }
@@ -69,3 +80,4 @@ struct PaginationView: View {
         .padding(.vertical, DesignTokens.Spacing.sm)
     }
 }
+

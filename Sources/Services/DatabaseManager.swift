@@ -382,12 +382,12 @@ final class DatabaseManager: DatabaseManagerProtocol {
             try db.run(expenses.create(ifNotExists: true) { t in
                 t.column(id, primaryKey: true)
                 t.column(category)
-                t.column(vendor)
+                t.column(expenseVendor)
                 t.column(description)
                 t.column(amount)
                 t.column(date)
-                t.column(vehicleId)
-                t.column(driverId)
+                t.column(expenseVehicleId)
+                t.column(expenseDriverId)
                 t.column(receiptNumber)
                 t.column(notes)
                 t.column(createdAt)
@@ -605,9 +605,11 @@ final class DatabaseManager: DatabaseManagerProtocol {
     func saveTrip(_ trip: Trip) throws {
         guard let db = db else { throw DatabaseError.notConnected }
         try transaction {
-            let existing = try db.pluck(trips.filter(id == trip.id.uuidString))
-            if existing != nil {
-                let row = trips.filter(id == trip.id.uuidString)
+            let filterExpr = (id == trip.id.uuidString || jobNumber == trip.jobNumber)
+            let existing = try db.pluck(trips.filter(filterExpr))
+            if let existingRow = existing {
+                let targetId = existingRow[id]
+                let row = trips.filter(id == targetId)
                 try db.run(row.update(
                     jobNumber <- trip.jobNumber,
                     customerId <- trip.customerId.uuidString,
@@ -662,6 +664,21 @@ final class DatabaseManager: DatabaseManagerProtocol {
                     updatedAt <- Date().timeIntervalSince1970
                 ))
             }
+
+            // Auto-sync Vehicle status based on trip assignment & status
+            if let vid = trip.vehicleId?.uuidString {
+                let otherActiveTrips = try db.scalar(
+                    trips.filter(id != trip.id.uuidString && tripVehicleId == vid && tripStatus == TripStatus.inTransit.rawValue).count
+                ) ?? 0
+
+                if trip.status == .inTransit {
+                    let vRow = vehicles.filter(id == vid && status != VehicleStatus.maintenance.rawValue && status != VehicleStatus.retired.rawValue)
+                    try db.run(vRow.update(status <- VehicleStatus.inUse.rawValue, updatedAt <- Date().timeIntervalSince1970))
+                } else if (trip.status == .completed || trip.status == .delivered || trip.status == .cancelled) && otherActiveTrips == 0 {
+                    let vRow = vehicles.filter(id == vid && status == VehicleStatus.inUse.rawValue)
+                    try db.run(vRow.update(status <- VehicleStatus.available.rawValue, updatedAt <- Date().timeIntervalSince1970))
+                }
+            }
         }
     }
 
@@ -709,6 +726,14 @@ final class DatabaseManager: DatabaseManagerProtocol {
             try db.run(relatedUpdates.delete())
             let relatedInvoiceTrips = invoiceTrips.filter(invoiceTripTripId == tid)
             try db.run(relatedInvoiceTrips.delete())
+
+            for invoiceRow in try db.prepare(invoices.filter(tripIds.like("%\(tid)%"))) {
+                let invId = invoiceRow[id]
+                let currentTripIds = invoiceRow[tripIds].split(separator: ",").map(String.init)
+                let newTripIds = currentTripIds.filter { $0 != tid }.joined(separator: ",")
+                try db.run(invoices.filter(id == invId).update(tripIds <- newTripIds))
+            }
+
             let tripRow = trips.filter(id == tid)
             try db.run(tripRow.delete())
         }
@@ -814,10 +839,12 @@ final class DatabaseManager: DatabaseManagerProtocol {
     func saveInvoice(_ invoice: Invoice) throws {
         guard let db = db else { throw DatabaseError.notConnected }
         try transaction {
-            let existing = try db.pluck(invoices.filter(id == invoice.id.uuidString))
+            let filterExpr = (id == invoice.id.uuidString || invoiceNumber == invoice.invoiceNumber)
+            let existing = try db.pluck(invoices.filter(filterExpr))
             let tripIdStrings = invoice.tripIds.map { $0.uuidString }
-            if existing != nil {
-                let row = invoices.filter(id == invoice.id.uuidString)
+            if let existingRow = existing {
+                let targetId = existingRow[id]
+                let row = invoices.filter(id == targetId)
                 try db.run(row.update(
                     invoiceNumber <- invoice.invoiceNumber,
                     customerId <- invoice.customerId.uuidString,
@@ -832,7 +859,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
                     notes <- invoice.notes,
                     updatedAt <- Date().timeIntervalSince1970
                 ))
-                let deleteJunction = invoiceTrips.filter(invoiceTripInvoiceId == invoice.id.uuidString)
+                let deleteJunction = invoiceTrips.filter(invoiceTripInvoiceId == targetId)
                 try db.run(deleteJunction.delete())
             } else {
                 try db.run(invoices.insert(
@@ -1239,7 +1266,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
         let pendingTrips = try db.scalar(trips.filter(tripStatus == "Pending").count) ?? 0
 
         let monthlyRevenue = try db.scalar(
-            trips.filter(pickupDate >= startOfMonthTimestamp && tripStatus == "Completed").select(totalAmount.sum)
+            trips.filter(pickupDate >= startOfMonthTimestamp && (tripStatus == "Completed" || tripStatus == "Delivered")).select(totalAmount.sum)
         ) as? Double ?? 0
 
         let monthlyExpenses = try db.scalar(
@@ -1250,9 +1277,8 @@ final class DatabaseManager: DatabaseManagerProtocol {
 
         let thirtyDaysFromNow = Date().addingTimeInterval(30 * 24 * 60 * 60)
         let thirtyDaysTimestamp = thirtyDaysFromNow.timeIntervalSince1970
-        let nowTimestamp = Date().timeIntervalSince1970
         let expiringLicenses = try db.scalar(
-            drivers.filter(licenseExpiry > nowTimestamp && licenseExpiry <= thirtyDaysTimestamp && status == "Active").count
+            drivers.filter(licenseExpiry <= thirtyDaysTimestamp && status == "Active").count
         ) ?? 0
 
         return DashboardStats(
@@ -1277,12 +1303,12 @@ final class DatabaseManager: DatabaseManagerProtocol {
         guard let db = db else { return [] }
         let calendar = Calendar.current
         let now = Date()
+        guard let startOfCurrentMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: now)) else { return [] }
         var result: [(Date, Double)] = []
 
         for i in 0..<months {
-            let monthDate = calendar.date(byAdding: .month, value: -i, to: now)!
-            let startOfMonth = calendar.date(from: calendar.dateComponents([.year, .month], from: monthDate))!
-            guard let endOfMonth = calendar.date(byAdding: .month, value: 1, to: startOfMonth) else { continue }
+            guard let startOfMonth = calendar.date(byAdding: .month, value: -i, to: startOfCurrentMonth),
+                  let endOfMonth = calendar.date(byAdding: .month, value: 1, to: startOfMonth) else { continue }
 
             let startTs = startOfMonth.timeIntervalSince1970
             let endTs = endOfMonth.timeIntervalSince1970
@@ -1299,42 +1325,49 @@ final class DatabaseManager: DatabaseManagerProtocol {
 
     func getExpensesByCategory() throws -> [(ExpenseCategory, Double)] {
         guard let db = db else { return [] }
-        var result: [(ExpenseCategory, Double)] = []
-        let categoryColumn = SQLExpression<String>("category")
-        for row in try db.prepare(expenses.group(categoryColumn)) {
-            let cat = ExpenseCategory(rawValue: row[categoryColumn]) ?? .other
-            let sum = try db.scalar(expenses.filter(categoryColumn == row[categoryColumn]).select(amount.sum)) as? Double ?? 0
-            result.append((cat, sum))
+        var result: [ExpenseCategory: Double] = [:]
+        let categoryCol = SQLExpression<String>("category")
+        let sumCol = amount.sum
+
+        for row in try db.prepare(expenses.select(categoryCol, sumCol).group(categoryCol)) {
+            let cat = ExpenseCategory(rawValue: row[categoryCol]) ?? .other
+            if let sum = row[sumCol] {
+                result[cat] = sum
+            }
         }
-        return result.sorted { $0.1 > $1.1 }
+        return result.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
     }
 
     func getFleetUtilization(includeRetired: Bool = false) throws -> [(VehicleStatus, Int)] {
         guard let db = db else { return [] }
-        var result: [(VehicleStatus, Int)] = []
-        let statusColumn = SQLExpression<String>("status")
-        var query = vehicles.group(statusColumn)
+        var result: [VehicleStatus: Int] = [:]
+        let statusCol = SQLExpression<String>("status")
+        let countCol = statusCol.count
+
+        var query = vehicles.select(statusCol, countCol).group(statusCol)
         if !includeRetired {
-            query = vehicles.filter(status != "Retired").group(statusColumn)
+            query = vehicles.filter(status != "Retired").select(statusCol, countCol).group(statusCol)
         }
         for row in try db.prepare(query) {
-            let st = VehicleStatus(rawValue: row[statusColumn]) ?? .available
-            let count = try db.scalar(vehicles.filter(statusColumn == row[statusColumn]).count) ?? 0
-            result.append((st, count))
+            let st = VehicleStatus(rawValue: row[statusCol]) ?? .available
+            let count = row[countCol]
+            result[st] = count
         }
-        return result.sorted { $0.1 > $1.1 }
+        return result.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
     }
 
     func getTripsByStatus() throws -> [(TripStatus, Int)] {
         guard let db = db else { return [] }
-        var result: [(TripStatus, Int)] = []
-        let statusColumn = SQLExpression<String>("status")
-        for row in try db.prepare(trips.group(statusColumn)) {
-            let st = TripStatus(rawValue: row[statusColumn]) ?? .pending
-            let count = try db.scalar(trips.filter(statusColumn == row[statusColumn]).count) ?? 0
-            result.append((st, count))
+        var result: [TripStatus: Int] = [:]
+        let statusCol = SQLExpression<String>("status")
+        let countCol = statusCol.count
+
+        for row in try db.prepare(trips.select(statusCol, countCol).group(statusCol)) {
+            let st = TripStatus(rawValue: row[statusCol]) ?? .pending
+            let count = row[countCol]
+            result[st] = count
         }
-        return result.sorted { $0.1 > $1.1 }
+        return result.map { ($0.key, $0.value) }.sorted { $0.1 > $1.1 }
     }
 
     // MARK: - Import / Export
@@ -2197,7 +2230,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
         let expNormal2 = now.addingTimeInterval(500 * 86400)
         let expNormal3 = now.addingTimeInterval(200 * 86400)
 
-        var d1 = Driver(
+        let d1 = Driver(
             firstName: "Marcus",
             lastName: "Johnson",
             email: "mjohnson@transfleetcorp.com",
@@ -2213,7 +2246,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
             notes: "Senior interstate haul lead driver",
             rating: 4.9
         )
-        var d2 = Driver(
+        let d2 = Driver(
             firstName: "Elena",
             lastName: "Rostova",
             email: "erostova@transfleetcorp.com",
@@ -2229,7 +2262,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
             notes: "Hazmat & Tanker endorsement certified",
             rating: 4.8
         )
-        var d3 = Driver(
+        let d3 = Driver(
             firstName: "David",
             lastName: "Miller",
             email: "dmiller@transfleetcorp.com",
@@ -2245,7 +2278,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
             notes: "Regional Southeast routes specialist",
             rating: 4.7
         )
-        var d4 = Driver(
+        let d4 = Driver(
             firstName: "Robert",
             lastName: "Taylor",
             email: "rtaylor@transfleetcorp.com",
@@ -2288,7 +2321,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
         try saveCertification(cert2)
 
         // 6. Trips
-        var t1 = Trip(
+        let t1 = Trip(
             jobNumber: "TF-20260920-001",
             customerId: customer2.id,
             driverId: d2.id,
@@ -2312,7 +2345,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
             totalAmount: 2070.0,
             notes: "Temperature sensitive cargo - monitor APU"
         )
-        var t2 = Trip(
+        let t2 = Trip(
             jobNumber: "TF-20260915-002",
             customerId: customer1.id,
             driverId: d1.id,
@@ -2336,7 +2369,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
             totalAmount: 2710.0,
             notes: "On-time delivery confirmed by receiver"
         )
-        var t3 = Trip(
+        let t3 = Trip(
             jobNumber: "TF-20260918-003",
             customerId: customer3.id,
             driverId: d3.id,
@@ -2360,7 +2393,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
             totalAmount: 2150.0,
             notes: "Delivered cleanly, awaiting POD sign-off"
         )
-        var t4 = Trip(
+        let t4 = Trip(
             jobNumber: "TF-20260924-004",
             customerId: customer1.id,
             driverId: nil,
@@ -2391,7 +2424,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
         try saveTrip(t4)
 
         // 7. Invoices
-        var inv1 = Invoice(
+        let inv1 = Invoice(
             invoiceNumber: "INV-202609-001",
             customerId: customer1.id,
             tripIds: [t2.id],
@@ -2404,7 +2437,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
             paidDate: now.addingTimeInterval(-2 * 86400),
             notes: "Paid via ACH transfer"
         )
-        var inv2 = Invoice(
+        let inv2 = Invoice(
             invoiceNumber: "INV-202609-002",
             customerId: customer3.id,
             tripIds: [t3.id],
@@ -2417,7 +2450,7 @@ final class DatabaseManager: DatabaseManagerProtocol {
             paidDate: nil,
             notes: "Invoice sent to billing department"
         )
-        var inv3 = Invoice(
+        let inv3 = Invoice(
             invoiceNumber: "INV-202608-015",
             customerId: customer2.id,
             tripIds: [t1.id],
